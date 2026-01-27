@@ -16,11 +16,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Minify HTML
-        uses: tdreyno/minify-action@v1
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          source: 'src'
-          destination: 'dist'
+          node-version: '20'
+
+      - name: Minify HTML
+        run: |
+          mkdir -p dist
+          npx html-minifier-terser src/index.html \
+            --collapse-whitespace \
+            --remove-comments \
+            --minify-js true \
+            --minify-css true \
+            -o dist/index.html
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
