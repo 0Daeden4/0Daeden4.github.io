@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Graphing Workspace</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjs/12.3.0/math.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <style>
+        /* --- CSS Variables --- */
+        :root {
+            --bg-canvas: #f1f5f9; --bg-panel: #ffffff; --bg-header: #e2e8f0; --bg-input: #f8fafc;
+            --border: #cbd5e1; --text-primary: #1e293b; --text-secondary: #64748b;
+            --accent: #6366f1; --danger: #ef4444;
+            --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            --note-bg: #fef9c3; --note-border: #fde047; --note-text: #854d0e;
+        }
+        body.dark {
+            --bg-canvas: #0f172a; --bg-panel: #1e293b; --bg-header: #334155; --bg-input: #0f172a;
+            --border: #475569; --text-primary: #f1f5f9; --text-secondary: #94a3b8;
+            --accent: #818cf8; --danger: #f87171;
+            --shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+            --note-bg: #422006; --note-border: #713f12; --note-text: #fefce8;
+        }
+        body { background-color: var(--bg-canvas); color: var(--text-primary); font-family: 'Inter', sans-serif; overflow: hidden; user-select: none; transition: background-color 0.3s; }
+
+        /* --- Layout --- */
+        #canvas-wrapper { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; overflow: hidden; cursor: grab; }
+        #canvas-wrapper:active { cursor: grabbing; }
+        #canvas-transform { transform-origin: 0 0; position: absolute; top: 0; left: 0; pointer-events: auto; }
+        #drawing-layer { position: absolute; top: 0; left: 0; pointer-events: none; z-index: 5; }
+        
+        .ghost-resizer { 
+            position: absolute; border: 2px dashed var(--accent); background: rgba(99, 102, 241, 0.15); 
+            z-index: 99999; pointer-events: none; border-radius: 12px; box-sizing: border-box; 
+        }
+
+        /* --- Components --- */
+        .glass-panel { background: var(--bg-panel); border: 1px solid var(--border); box-shadow: var(--shadow); border-radius: 12px; }
+        .btn-pill { background: var(--bg-input); border: 1px solid var(--border); padding: 6px 14px; border-radius: 99px; font-size: 0.85rem; cursor: pointer; display: flex; align-items: center; gap: 8px; transition: 0.2s; }
+        .btn-pill:hover { background: var(--bg-header); transform: translateY(-1px); }
+        .btn-primary { background: var(--accent); color: white; border-color: var(--accent); }
+
+        /* --- Graph Container --- */
+        .graph-container { 
+            position: absolute; background: var(--bg-panel); border: 1px solid var(--border); 
+            box-shadow: var(--shadow); border-radius: 12px; display: flex; flex-direction: column; 
+            width: 650px; z-index: 10; 
+        }
+        .container-header { 
+            height: 44px; background: var(--bg-header); border-bottom: 1px solid var(--border); 
+            border-radius: 12px 12px 0 0; display: flex; align-items: center; padding: 0 12px; gap: 8px; 
+            cursor: move; flex-shrink: 0; 
+        }
+        .header-input { background: transparent; border: none; outline: none; color: var(--text-primary); font-weight: 600; flex-grow: 1; }
+        .header-btn { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 6px; cursor: pointer; transition: 0.2s; }
+        .header-btn:hover { background: rgba(0,0,0,0.1); }
+        .header-btn.danger:hover { background: var(--danger); color: white; }
+
+        .graph-body { 
+            display: flex; flex-direction: column; 
+            height: 500px; 
+            position: relative; overflow: hidden;
+        }
+        .plot-area { 
+            flex: 1 1 0; 
+            min-height: 0; 
+            width: 100%; position: relative; 
+        }
+        .sidebar { 
+            flex: 0 0 auto; 
+            background: var(--bg-panel); border-top: 1px solid var(--border); 
+            padding: 12px; overflow-y: auto; max-height: 350px; 
+            z-index: 20; position: relative;
+        }
+
+        /* --- Focus Page --- */
+        #focus-page { position: fixed; inset: 0; background: var(--bg-canvas); z-index: 5000; display: flex; flex-direction: column; transform: translateY(100%); transition: transform 0.3s ease-in-out; overflow-y: auto; }
+        #focus-page.active { transform: translateY(0); }
+        #focus-graph-wrapper { background: var(--bg-panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; display: flex; flex-direction: column; resize: vertical; min-height: 500px; height: 60vh; width: 100%; position: relative; }
+        #focus-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; width: 100%; max-width: 1400px; margin-top: 20px; }
+        .focus-section { background: var(--bg-panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+
+        /* --- Panels & Inputs --- */
+        .tool-panel { position: fixed; z-index: 2000; padding: 16px; width: 260px; }
+        .settings-drawer { position: fixed; top: 80px; right: 20px; width: 280px; z-index: 2000; transform: translateX(350px); transition: transform 0.3s; }
+        .settings-drawer.open { transform: translateX(0); }
+        .control-group { background: var(--bg-input); border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-bottom: 8px; }
+        .styled-input { background: var(--bg-panel); border: 1px solid var(--border); color: var(--text-primary); padding: 4px 8px; border-radius: 4px; width: 100%; font-size: 0.85rem; outline: none; }
+        .label-text { font-size: 0.7rem; text-transform: uppercase; font-weight: 700; color: var(--text-secondary); margin-bottom: 4px; display: block; }
+        .calc-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-top: 8px; }
+        .calc-btn { background: var(--bg-input); border: 1px solid var(--border); padding: 8px; border-radius: 6px; cursor: pointer; }
+        .calc-btn:hover { background: var(--bg-header); }
+        .theme-chip { border: 2px solid var(--border); border-radius: 8px; padding: 8px; cursor: pointer; text-align: center; font-size: 0.75rem; font-weight: bold; transition: 0.2s; }
+        .theme-chip:hover { border-color: var(--accent); transform: scale(1.02); }
+
+        .markdown-note { position: absolute; width: 240px; min-height: 180px; background: var(--note-bg); border: 1px solid var(--note-border); color: var(--note-text); border-radius: 8px; z-index: 15; display: flex; flex-direction: column; }
+        .note-header { cursor: move; padding: 6px; display: flex; justify-content: flex-end; background: rgba(0,0,0,0.05); }
+        .resize-handle { position: absolute; bottom: 0; right: 0; width: 16px; height: 16px; cursor: se-resize; z-index: 20; }
+        .hidden { display: none !important; }
+        .minimized { height: auto !important; } .minimized .graph-body { display: none; }
+    </style>
+</head>
+<body class="light">
+
+<div id="canvas-wrapper"><div id="canvas-transform"><canvas id="drawing-layer"></canvas></div></div>
+
+<div id="focus-page">
+    <div class="h-16 bg-[var(--bg-header)] border-b border-[var(--border)] flex items-center px-6 justify-between flex-shrink-0 sticky top-0 z-50">
+        <div class="flex items-center gap-3"><i class="fas fa-expand text-[var(--accent)] text-xl"></i><span class="font-bold text-xl" id="focus-title">Focus View</span></div>
+        <div class="flex gap-3"><button class="btn-pill" onclick="App.focusTarget.saveImg()"><i class="fas fa-camera"></i> Snapshot</button><button class="btn-pill" onclick="App.exitFocus()"><i class="fas fa-arrow-left"></i> Back</button></div>
+    </div>
+    <div class="flex flex-col items-center p-8 w-full flex-grow">
+        <div id="focus-graph-wrapper"><div id="focus-plot-area" class="w-full h-full"></div><div class="absolute bottom-0 w-full h-2 cursor-ns-resize bg-[var(--border)] opacity-50 hover:opacity-100"></div></div>
+        <div id="focus-grid">
+            <div class="focus-section"><h3 class="text-lg font-bold mb-4 border-b border-[var(--border)] pb-2">Functions</h3><div id="focus-funcs-list" class="flex flex-col gap-2"></div><button class="btn-pill mt-4 justify-center w-full" onclick="App.focusTarget.addFunc()">+ Add Function</button></div>
+            <div class="focus-section"><h3 class="text-lg font-bold mb-4 border-b border-[var(--border)] pb-2">Settings</h3><div id="focus-settings-area"></div></div>
+        </div>
+    </div>
+</div>
+
+<div id="main-toolbar" class="fixed top-4 left-1/2 -translate-x-1/2 z-50 flex gap-2 glass-panel p-2 rounded-full">
+    <button class="btn-pill btn-primary" onclick="App.createContainer()"><i class="fas fa-plus"></i> Graph</button>
+    <button class="btn-pill" onclick="App.createNote()"><i class="fas fa-sticky-note"></i></button>
+    <div class="w-px bg-gray-300 dark:bg-gray-600 mx-1"></div>
+    <button class="btn-pill" onclick="App.toggleDrawer()"><i class="fas fa-cog"></i></button>
+    <button class="btn-pill" onclick="App.toggleTool('calculator')"><i class="fas fa-calculator"></i></button>
+    <button class="btn-pill" onclick="App.toggleTool('drawing-panel')"><i class="fas fa-pen"></i></button>
+    <button class="btn-pill" onclick="App.toggleTheme()"><i class="fas fa-adjust"></i></button>
+    <div class="w-px bg-gray-300 dark:bg-gray-600 mx-1"></div>
+    <button class="btn-pill" onclick="Project.save()"><i class="fas fa-save"></i></button>
+    <button class="btn-pill" onclick="document.getElementById('upload').click()"><i class="fas fa-folder-open"></i></button>
+    <input type="file" id="upload" class="hidden" onchange="Project.load(this)">
+</div>
+
+<div id="settings-drawer" class="settings-drawer glass-panel p-4">
+    <div class="flex justify-between items-center mb-4"><span class="font-bold">Global Settings</span><button onclick="App.toggleDrawer()" class="text-xs">✕</button></div>
+    <div class="mb-4"><span class="label-text">Global Opacity</span><input type="range" min="0.1" max="1" step="0.1" value="0.8" class="w-full h-2 bg-gray-300 rounded appearance-none" oninput="App.setGlobalOpacity(this.value)"></div>
+    <span class="label-text">Graph Themes</span>
+    <div class="grid grid-cols-2 gap-2 mt-2">
+        <div class="theme-chip bg-gray-100 text-gray-800" onclick="App.setGlobalTheme('default')">Default</div>
+        <div class="theme-chip bg-blue-900 text-blue-100" onclick="App.setGlobalTheme('blueprint')">Blueprint</div>
+        <div class="theme-chip bg-black text-green-400 border-green-800" onclick="App.setGlobalTheme('matrix')">Matrix</div>
+        <div class="theme-chip bg-[#fdf6e3] text-[#586e75] border-[#d2b48c]" onclick="App.setGlobalTheme('topo')">Topographical</div>
+        <div class="theme-chip bg-gradient-to-r from-orange-400 to-pink-500 text-white" onclick="App.setGlobalTheme('sunset')">Sunset</div>
+        <div class="theme-chip bg-teal-900 text-cyan-300" onclick="App.setGlobalTheme('ocean')">Ocean</div>
+    </div>
+</div>
+
+<div id="calculator" class="tool-panel glass-panel hidden" style="top: 100px; right: 20px;">
+    <div class="flex justify-between items-center mb-2 cursor-move" onmousedown="Drag.startAbsolute(event, 'calculator')"><span class="font-bold text-sm">Calculator</span><button onclick="App.toggleTool('calculator')">✕</button></div>
+    <input type="text" id="calc-display" class="w-full mb-1 p-2 text-right font-mono bg-transparent border-b border-[var(--border)] outline-none"><div id="calc-res" class="text-xs text-right h-4 mb-2 opacity-70"></div>
+    <div class="calc-grid">
+        <button class="calc-btn" onclick="Calc.add('sin(')">sin</button><button class="calc-btn" onclick="Calc.add('cos(')">cos</button><button class="calc-btn" onclick="Calc.add('tan(')">tan</button><button class="calc-btn text-[var(--danger)]" onclick="Calc.clear()">C</button>
+        <button class="calc-btn" onclick="Calc.add('sqrt(')">√</button><button class="calc-btn" onclick="Calc.add('^')">^</button><button class="calc-btn" onclick="Calc.add('(')">(</button><button class="calc-btn" onclick="Calc.add(')')">)</button>
+        <button class="calc-btn" onclick="Calc.add('7')">7</button><button class="calc-btn" onclick="Calc.add('8')">8</button><button class="calc-btn" onclick="Calc.add('9')">9</button><button class="calc-btn" onclick="Calc.add('/')">÷</button>
+        <button class="calc-btn" onclick="Calc.add('4')">4</button><button class="calc-btn" onclick="Calc.add('5')">5</button><button class="calc-btn" onclick="Calc.add('6')">6</button><button class="calc-btn" onclick="Calc.add('*')">×</button>
+        <button class="calc-btn" onclick="Calc.add('1')">1</button><button class="calc-btn" onclick="Calc.add('2')">2</button><button class="calc-btn" onclick="Calc.add('3')">3</button><button class="calc-btn" onclick="Calc.add('-')">-</button>
+        <button class="calc-btn" onclick="Calc.add('0')">0</button><button class="calc-btn" onclick="Calc.add('.')">.</button><button class="calc-btn bg-[var(--accent)] text-white" onclick="Calc.eval()">=</button><button class="calc-btn" onclick="Calc.add('+')">+</button>
+    </div>
+</div>
+
+<div id="drawing-panel" class="tool-panel glass-panel hidden" style="bottom: 20px; right: 20px;">
+    <div class="flex justify-between items-center mb-2 cursor-move" onmousedown="Drag.startAbsolute(event, 'drawing-panel')"><span class="font-bold text-sm">Drawing</span><button onclick="App.toggleTool('drawing-panel')">✕</button></div>
+    <div class="grid grid-cols-2 gap-2 mb-3"><button class="calc-btn text-xs" onclick="Drawing.setMode('none')">Select</button><button class="calc-btn text-xs" onclick="Drawing.setMode('pen')">Pen</button><button class="calc-btn text-xs" onclick="Drawing.setMode('arrow')">Arrow</button><button class="calc-btn text-xs" onclick="Drawing.setMode('eraser')">Eraser</button></div>
+    <div class="flex items-center gap-2 border-t border-[var(--border)] pt-2"><input type="color" id="draw-color" value="#ef4444" class="h-6 w-6 border-0 bg-transparent cursor-pointer"><button class="calc-btn text-xs ml-auto text-[var(--danger)]" onclick="Drawing.clear()">Clear</button></div>
+</div>
+
+<script>
+const Utils = { 
+    getVars(e) { try { return [...new Set(math.parse(e).filter(n=>n.isSymbolNode).map(n=>n.name))].filter(s=>!['pi','e','sin','cos','tan','sqrt','log','exp'].includes(s)); } catch(e){return['x'];} } 
+};
+
+const App = {
+    containers: [], notes: [], idCounter: 0, theme: 'light', globalSettings: { opacity: 0.8, preset: 'default' },
+    canvas: { x: 0, y: 0, scale: 1, isDragging: false, startX: 0, startY: 0 },
+    focusTarget: null,
+
+    init() {
+        this.setupNav(); Drawing.init();
+        window.addEventListener('resize', () => { this.containers.forEach(c => c.resize()); Drawing.resize(); });
+        window.addEventListener('mouseup', () => Drag.end());
+    },
+    getId() { return 'obj_' + (++this.idCounter); },
+    toggleTheme() { this.theme = this.theme === 'light' ? 'dark' : 'light'; document.body.className = this.theme; this.containers.forEach(c => c.updateGraph()); },
+    toggleTool(id) { document.getElementById(id).classList.toggle('hidden'); },
+    toggleDrawer() { document.getElementById('settings-drawer').classList.toggle('open'); },
+    
+    setGlobalOpacity(v) { this.globalSettings.opacity = parseFloat(v); this.containers.forEach(c=>{c.settings.opacity=this.globalSettings.opacity; c.updateGraph();}); },
+    setGlobalTheme(p) { this.globalSettings.preset = p; this.containers.forEach(c=>c.updateGraph()); },
+
+    createContainer(d) { this.containers.push(new GraphContainer(this.getId(), d)); },
+    createNote(d) { new Note(this.getId(), d); },
+    removeContainer(id) { 
+        if(this.focusTarget && this.focusTarget.id === id) return; 
+        this.containers = this.containers.filter(c => c.id !== id); document.getElementById(id).remove(); 
+    },
+
+    setupNav() {
+        const w = document.getElementById('canvas-wrapper');
+        w.addEventListener('wheel', e => {
+            if(e.target.closest('.plot-area') || e.target.closest('.sidebar') || e.target.closest('input')) return;
+            e.preventDefault(); this.canvas.scale = Math.min(Math.max(0.1, this.canvas.scale - e.deltaY * 0.001), 5); this.updTrans();
+        }, {passive:false});
+        w.addEventListener('mousedown', e => {
+            if(e.button === 2 || e.target.id === 'canvas-wrapper') { this.canvas.isDragging = true; this.canvas.startX = e.clientX - this.canvas.x; this.canvas.startY = e.clientY - this.canvas.y; }
+        });
+        window.addEventListener('mousemove', e => {
+            if(this.canvas.isDragging) { this.canvas.x = e.clientX - this.canvas.startX; this.canvas.y = e.clientY - this.canvas.startY; this.updTrans(); }
+        });
+        window.addEventListener('mouseup', () => this.canvas.isDragging = false);
+        window.addEventListener('contextmenu', e => e.preventDefault());
+    },
+    updTrans() { document.getElementById('canvas-transform').style.transform = `translate(${this.canvas.x}px, ${this.canvas.y}px) scale(${this.canvas.scale})`; },
+
+    enterFocus(id) {
+        this.focusTarget = this.containers.find(c => c.id === id);
+        if(!this.focusTarget) return;
+        document.getElementById('focus-title').innerText = "Focus: Graph " + id;
+        document.getElementById('focus-page').classList.add('active');
+        const plotDiv = document.getElementById('plot-' + id);
+        document.getElementById('focus-plot-area').appendChild(plotDiv);
+        this.focusTarget.renderFocusControls();
+        document.getElementById('main-toolbar').classList.add('hidden');
+        setTimeout(() => Plotly.relayout(plotDiv, {autosize: true}), 100);
+    },
+    exitFocus() {
+        if(!this.focusTarget) return;
+        const plotDiv = document.getElementById('plot-' + this.focusTarget.id);
+        document.getElementById('plot-container-' + this.focusTarget.id).appendChild(plotDiv);
+        document.getElementById('focus-page').classList.remove('active');
+        document.getElementById('main-toolbar').classList.remove('hidden');
+        this.focusTarget.renderSidebar(); 
+        setTimeout(() => Plotly.relayout(plotDiv, {autosize: true}), 100);
+        this.focusTarget = null;
+    }
+};
+
+class GraphContainer {
+    constructor(id, data = null) {
+        this.id = id;
+        this.functions = data ? data.functions : [{ expr: 'sin(x)', visible: true }, { expr: '1', visible: true }];
+        this.settings = data ? data.settings : { 
+            xMin:-5,xMax:5,yMin:-5,yMax:5, grid:false, intersect:true, 
+            opacity:App.globalSettings.opacity, labels:{x:'X',y:'Y',z:'Z'},
+            sparsity: 100, aspectRatio: 'cube', intersectWidth: 5 
+        };
+        if(!this.settings.labels) this.settings.labels = {x:'X',y:'Y',z:'Z'};
+        if(!this.settings.sparsity) this.settings.sparsity = 100;
+        if(!this.settings.intersectWidth) this.settings.intersectWidth = 5;
+        this.pos = data ? data.pos : { x: 100 + App.containers.length*30, y: 100 };
+        this.size = data ? data.size : { w: 650, h: 600 };
+        this.render(); setTimeout(() => this.updateGraph(), 50);
+    }
+
+    isGraph3D() {
+        const active = this.functions.filter(f => f.visible && f.expr.trim());
+        let has3D = false;
+        active.forEach(f => { if(Utils.getVars(f.expr).length >= 2) has3D = true; });
+        return has3D;
+    }
+
+    render() {
+        const el = document.createElement('div'); el.className = 'graph-container'; el.id = this.id;
+        el.style.left = this.pos.x + 'px'; el.style.top = this.pos.y + 'px'; el.style.width = this.size.w + 'px';
+        el.innerHTML = `
+            <div class="container-header" onmousedown="Drag.start(event, '${this.id}')">
+                <i class="fas fa-cube text-[var(--accent)]"></i><input type="text" value="Graph ${this.id}" class="header-input" onmousedown="event.stopPropagation()">
+                <div class="flex gap-1"><button class="header-btn" onclick="App.containers.find(c=>c.id=='${this.id}').saveImg()"><i class="fas fa-camera"></i></button><button class="header-btn" onclick="App.containers.find(c=>c.id=='${this.id}').toggleMin()">_</button><button class="header-btn" onclick="App.enterFocus('${this.id}')">□</button><button class="header-btn danger" onclick="App.removeContainer('${this.id}')">✕</button></div>
+            </div>
+            <div class="graph-body" style="height:${this.size.h}px"><div id="plot-container-${this.id}" class="plot-area"><div id="plot-${this.id}" class="w-full h-full"></div></div><div class="sidebar" id="sidebar-${this.id}"></div><div class="resize-handle" onmousedown="Drag.resizeStart(event, '${this.id}')"></div></div>`;
+        document.getElementById('canvas-transform').appendChild(el);
+        document.getElementById(`plot-${this.id}`).addEventListener('wheel', e => e.stopPropagation(), {passive:false});
+        new ResizeObserver(() => Plotly.relayout(`plot-${this.id}`, {autosize: true})).observe(el.querySelector('.plot-area'));
+        this.renderSidebar();
+    }
+
+    renderSidebar() {
+        const s = document.getElementById(`sidebar-${this.id}`); if(!s) return;
+        s.innerHTML = `<div class="mb-3"><div class="flex justify-between items-center mb-1"><span class="label-text">Functions</span><button class="text-xs text-blue-500" onclick="App.containers.find(c=>c.id=='${this.id}').addFunc()">+ Add</button></div><div id="funcs-${this.id}" class="flex flex-col gap-2"></div></div>
+            <div class="control-group"><div class="flex justify-between cursor-pointer" onclick="document.getElementById('set-${this.id}').classList.toggle('hidden');"><span class="label-text mb-0">Settings</span><i class="fas fa-chevron-down text-xs opacity-50"></i></div><div id="set-${this.id}" class="hidden mt-3 space-y-2">${this.getSettingsHTML()}</div></div>`;
+        this.renderFuncs(`funcs-${this.id}`);
+    }
+    renderFocusControls() {
+        document.getElementById('focus-funcs-list').innerHTML = ''; this.renderFuncs('focus-funcs-list');
+        document.getElementById('focus-settings-area').innerHTML = `<div class="grid grid-cols-2 gap-8">${this.getSettingsHTML(true)}</div>`;
+    }
+
+    getSettingsHTML(exp=false) {
+        const is3D = this.isGraph3D();
+        const display3D = is3D ? '' : 'style="display:none"';
+        return `<div class="grid grid-cols-3 gap-2 mb-2"><input class="styled-input" placeholder="Lbl X" value="${this.settings.labels.x}" onchange="App.containers.find(c=>c.id=='${this.id}').updLbl('x',this.value)"><input class="styled-input" placeholder="Lbl Y" value="${this.settings.labels.y}" onchange="App.containers.find(c=>c.id=='${this.id}').updLbl('y',this.value)"><input class="styled-input" placeholder="Lbl Z" ${display3D} value="${this.settings.labels.z}" onchange="App.containers.find(c=>c.id=='${this.id}').updLbl('z',this.value)"></div>
+        <div class="${exp?'grid grid-cols-4 gap-4':'grid grid-cols-2 gap-2'}"><div><span class="label-text">Min X</span><input type="number" class="styled-input" value="${this.settings.xMin}" onchange="App.containers.find(c=>c.id=='${this.id}').upd('xMin',this.value)"></div><div><span class="label-text">Max X</span><input type="number" class="styled-input" value="${this.settings.xMax}" onchange="App.containers.find(c=>c.id=='${this.id}').upd('xMax',this.value)"></div><div><span class="label-text">Min Y</span><input type="number" class="styled-input" value="${this.settings.yMin}" onchange="App.containers.find(c=>c.id=='${this.id}').upd('yMin',this.value)"></div><div><span class="label-text">Max Y</span><input type="number" class="styled-input" value="${this.settings.yMax}" onchange="App.containers.find(c=>c.id=='${this.id}').upd('yMax',this.value)"></div></div>
+        <div class="grid grid-cols-2 gap-2 mt-2"><div ${display3D}><span class="label-text">Grid Density</span><input type="range" min="10" max="100" step="5" value="${this.settings.sparsity}" class="w-full h-2 bg-gray-300 rounded" oninput="App.containers.find(c=>c.id=='${this.id}').upd('sparsity',this.value)"></div><div><span class="label-text">Int. Width</span><input type="range" min="1" max="20" step="1" value="${this.settings.intersectWidth}" class="w-full h-2 bg-gray-300 rounded" oninput="App.containers.find(c=>c.id=='${this.id}').upd('intersectWidth',this.value)"></div></div>
+        <div class="flex items-center justify-between mb-2 mt-2" ${display3D}><span class="label-text">Aspect Ratio</span><button class="btn-pill text-xs py-1" onclick="App.containers.find(c=>c.id=='${this.id}').toggleAspect()">${this.settings.aspectRatio}</button></div>
+        <div class="flex gap-4"><label class="flex items-center gap-2 text-xs"><input type="checkbox" ${this.settings.grid?'checked':''} onchange="App.containers.find(c=>c.id=='${this.id}').upd('grid',this.checked)"> ${is3D ? 'Grid on Surface' : 'Show Grid'}</label><label class="flex items-center gap-2 text-xs"><input type="checkbox" ${this.settings.intersect?'checked':''} onchange="App.containers.find(c=>c.id=='${this.id}').upd('intersect',this.checked)"> Show Intersections</label></div>`;
+    }
+
+    renderFuncs(tid) {
+        const div=document.getElementById(tid); if(!div) return; div.innerHTML='';
+        this.functions.forEach((f,i)=>{
+            const row=document.createElement('div'); row.className='control-group flex items-center gap-2 py-2 mb-0'; row.style.background='var(--bg-panel)';
+            row.innerHTML=`<input type="checkbox" ${f.visible?'checked':''} onchange="App.containers.find(c=>c.id=='${this.id}').toggleFunc(${i})"><input type="text" value="${f.expr}" class="styled-input" onchange="App.containers.find(c=>c.id=='${this.id}').updFunc(${i},this.value)" onmousedown="event.stopPropagation()"><button class="text-[var(--danger)]" onclick="App.containers.find(c=>c.id=='${this.id}').delFunc(${i})">✕</button>`;
+            div.appendChild(row);
+        });
+    }
+
+    addFunc(){this.functions.push({expr:'',visible:true}); this.refreshUI(); this.updateGraph();}
+    delFunc(i){this.functions.splice(i,1); this.refreshUI(); this.updateGraph();}
+    toggleFunc(i){this.functions[i].visible=!this.functions[i].visible; this.updateGraph();}
+    updFunc(i,v){this.functions[i].expr=v; this.refreshUI(); this.updateGraph();}
+    upd(k,v){this.settings[k]=(k==='grid'||k==='intersect')?v:parseFloat(v); this.updateGraph();}
+    updLbl(k,v){this.settings.labels[k]=v; this.updateGraph();}
+    toggleAspect(){this.settings.aspectRatio = this.settings.aspectRatio==='cube'?'data':'cube'; this.refreshUI(); this.updateGraph();}
+    refreshUI(){if(App.focusTarget===this)this.renderFocusControls(); else this.renderSidebar();}
+    saveImg(){Plotly.toImage(document.getElementById(`plot-${this.id}`),{format:'png',height:600,width:800}).then(u=>{const a=document.createElement('a');a.href=u;a.download='graph.png';a.click();});}
+
+    getThemeData(idx) {
+        const p = App.globalSettings.preset;
+        if(p==='topo') return { scale: idx%2===0?'Earth':'Picnic', bg:'rgba(0,0,0,0)', font:'#586e75', grid:'#d2b48c' };
+        if(p==='matrix') return { scale: idx%2===0 ? [[0,'black'],[1,'#0f0']] : [[0,'black'],[1,'#003300']], bg:'rgba(0,0,0,0)', font:'#0f0', grid:'#003300' };
+        if(p==='sunset') return { scale: idx%2===0 ? 'Hot' : 'Portland', bg:'rgba(0,0,0,0)', font:'#1e293b', grid:'#e2e8f0' };
+        if(p==='ocean') return { scale: idx%2===0 ? 'Tealgrn' : 'Blues', bg:'rgba(0,0,0,0)', font:'#06b6d4', grid:'#164e63' };
+        if(p==='blueprint') return { scale: 'Blues', bg:'rgba(0,0,0,0)', font:'#bfdbfe', grid:'#1e3a8a' };
+        if(p==='neon') return { scale: idx%2===0?'Electric':'Picnic', bg:'rgba(0,0,0,0)', font:'#4ade80', grid:'#111827' };
+        const scales = ['Viridis', 'Plasma', 'Magma', 'Inferno'];
+        return { scale: scales[idx%scales.length], bg:'rgba(0,0,0,0)', font: App.theme==='dark'?'#f1f5f9':'#1e293b', grid: App.theme==='dark'?'#475569':'#e2e8f0' };
+    }
+    
+    getPalette() {
+        const p = App.globalSettings.preset;
+        if(p==='blueprint') return ['#ffffff', '#93c5fd', '#60a5fa', '#2563eb'];
+        if(p==='neon') return ['#ff00ff', '#00ffff', '#ffff00', '#00ff00'];
+        if(p==='scientific') return ['#000000', '#ef4444', '#1d4ed8', '#059669'];
+        return ['#6366f1', '#ec4899', '#10b981', '#f59e0b', '#8b5cf6'];
+    }
+
+    updateGraph() {
+        const active = this.functions.filter(f => f.visible && f.expr.trim());
+        const themeData = this.getThemeData(0);
+        const palette = this.getPalette();
+        let has3D = this.isGraph3D();
+        const traces = []; 
+        const activeData = []; 
+
+        if (!has3D) {
+            const layout = {
+                autosize: true, margin: {t:0,b:0,l:0,r:0}, paper_bgcolor: themeData.bg, plot_bgcolor: themeData.bg,
+                font: { color: themeData.font, family: 'Inter' },
+                xaxis: { title: this.settings.labels.x, color: themeData.font, gridcolor: themeData.grid, showgrid: this.settings.grid },
+                yaxis: { title: this.settings.labels.y, color: themeData.font, gridcolor: themeData.grid, showgrid: this.settings.grid }
+            };
+            const step = (this.settings.xMax - this.settings.xMin) / 300;
+            active.forEach((f, idx) => {
+                const vars = Utils.getVars(f.expr);
+                const vX = vars[0] || 'x';
+                const code = math.compile(f.expr);
+                const xVals=[], yVals=[];
+                for(let x=this.settings.xMin; x<=this.settings.xMax; x+=step) {
+                    xVals.push(x);
+                    try { yVals.push(code.evaluate({[vX]: x})); } catch { yVals.push(NaN); }
+                }
+                activeData.push({x: xVals, y: yVals});
+                traces.push({
+                    type: 'scatter', mode: 'lines', x: xVals, y: yVals,
+                    line: { width: 3, color: palette[idx % palette.length] }, name: f.expr
+                });
+            });
+
+            if(this.settings.intersect && activeData.length >= 2) {
+                for(let i=0; i<activeData.length; i++) {
+                    for(let j=i+1; j<activeData.length; j++) {
+                        const A = activeData[i]; const B = activeData[j];
+                        const intX=[], intY=[];
+                        for(let k=0; k<A.x.length-1; k++) {
+                            const yA1 = A.y[k]; const yB1 = B.y[k];
+                            const yA2 = A.y[k+1]; const yB2 = B.y[k+1];
+                            const diff1 = yA1 - yB1;
+                            const diff2 = yA2 - yB2;
+                            
+                            // Check Crossing
+                            if (Math.sign(diff1) !== Math.sign(diff2)) {
+                                const r = Math.abs(diff1) / (Math.abs(diff1) + Math.abs(diff2));
+                                intX.push(A.x[k] + r * (A.x[k+1] - A.x[k]));
+                                intY.push(yA1 + r * (yA2 - yA1));
+                            }
+                            // Check Tangent (Proximity)
+                            else if (Math.abs(diff1) < 0.05) {
+                                // Filter to peaks/valleys
+                                const prevDiff = k > 0 ? Math.abs(A.y[k-1] - B.y[k-1]) : 999;
+                                const nextDiff = Math.abs(diff2);
+                                const currDiff = Math.abs(diff1);
+                                if (currDiff <= prevDiff && currDiff <= nextDiff) {
+                                    intX.push(A.x[k]); intY.push(yA1);
+                                }
+                            }
+                        }
+                        if(intX.length > 0) {
+                            traces.push({
+                                type: 'scatter', mode: 'markers', x: intX, y: intY,
+                                marker: { size: this.settings.intersectWidth * 1.5, color: '#ef4444' }, name: 'Int'
+                            });
+                        }
+                    }
+                }
+            }
+            Plotly.newPlot(`plot-${this.id}`, traces, layout, {displayModeBar: false, responsive: true});
+
+        } else {
+            const layout = {
+                autosize: true, margin: {t:0,b:0,l:0,r:0}, paper_bgcolor: themeData.bg, plot_bgcolor: themeData.bg,
+                font: { color: themeData.font, family: 'Inter' },
+                xaxis: { title: this.settings.labels.x, color: themeData.font, gridcolor: themeData.grid },
+                yaxis: { title: this.settings.labels.y, color: themeData.font, gridcolor: themeData.grid },
+                scene: {
+                    xaxis: { title: this.settings.labels.x, color: themeData.font, gridcolor: themeData.grid },
+                    yaxis: { title: this.settings.labels.y, color: themeData.font, gridcolor: themeData.grid },
+                    zaxis: { title: this.settings.labels.z, color: themeData.font, gridcolor: themeData.grid },
+                    aspectmode: this.settings.aspectRatio||'cube'
+                }
+            };
+
+            const active3DData = [];
+
+            active.forEach((f, idx) => {
+                try {
+                    const vars = Utils.getVars(f.expr);
+                    const code = math.compile(f.expr);
+                    const steps = parseInt(this.settings.sparsity);
+                    const xs = (this.settings.xMax-this.settings.xMin)/steps; 
+                    const ys = (this.settings.yMax-this.settings.yMin)/steps;
+                    const is2D = vars.length < 2; const vX = vars[0]||'x'; const vY = vars[1]||'y';
+                    const xD=[], yD=[], zD=[];
+
+                    for(let y=this.settings.yMin; y<=this.settings.yMax; y+=ys) {
+                        const zRow=[]; yD.push(y);
+                        for(let x=this.settings.xMin; x<=this.settings.xMax; x+=xs) {
+                            if(y===this.settings.yMin) xD.push(x);
+                            try { 
+                                const val = is2D ? code.evaluate({[vX]:x}) : code.evaluate({[vX]:x, [vY]:y});
+                                zRow.push(val); 
+                            } catch { zRow.push(NaN); }
+                        } zD.push(zRow);
+                    }
+                    active3DData.push({x:xD, y:yD, z:zD});
+
+                    traces.push({
+                        type: 'surface', x: xD, y: yD, z: zD, 
+                        colorscale: this.getThemeData(idx).scale, opacity: this.settings.opacity, showscale: false,
+                        contours: { 
+                            x: {show:this.settings.grid, color: App.theme==='dark'?'rgba(255,255,255,0.2)':'rgba(0,0,0,0.2)', start:this.settings.xMin, end:this.settings.xMax, size: xs}, 
+                            y: {show:this.settings.grid, color: App.theme==='dark'?'rgba(255,255,255,0.2)':'rgba(0,0,0,0.2)', start:this.settings.yMin, end:this.settings.yMax, size: ys} 
+                        }
+                    });
+                } catch(e) {}
+            });
+
+            if(this.settings.intersect && active3DData.length >= 2) {
+                for(let aIdx = 0; aIdx < active3DData.length; aIdx++) {
+                    for(let bIdx = aIdx + 1; bIdx < active3DData.length; bIdx++) {
+                        const A = active3DData[aIdx]; const B = active3DData[bIdx];
+                        const minA = Math.min(...A.z.flat().filter(n=>!isNaN(n))); const maxA = Math.max(...A.z.flat().filter(n=>!isNaN(n)));
+                        const minB = Math.min(...B.z.flat().filter(n=>!isNaN(n))); const maxB = Math.max(...B.z.flat().filter(n=>!isNaN(n)));
+                        if (minA > maxB || maxA < minB) continue; 
+
+                        const lineX=[], lineY=[], lineZ=[];
+                        for(let i=0; i<A.y.length-1; i++) {
+                            for(let j=0; j<A.x.length-1; j++) {
+                                const zA00 = A.z[i][j];   const zB00 = B.z[i][j];
+                                const zA10 = A.z[i][j+1]; const zB10 = B.z[i][j+1];
+                                const zA01 = A.z[i+1][j]; const zB01 = B.z[i+1][j];
+                                const zA11 = A.z[i+1][j+1]; const zB11 = B.z[i+1][j+1];
+                                if(isNaN(zA00)||isNaN(zB00)) continue;
+                                
+                                const d00 = zA00 - zB00; const d10 = zA10 - zB10;
+                                const d01 = zA01 - zB01; const d11 = zA11 - zB11;
+                                const pts = [];
+                                if(Math.sign(d00) !== Math.sign(d10)) {
+                                    const r = Math.abs(d00)/(Math.abs(d00)+Math.abs(d10));
+                                    pts.push({x: A.x[j] + r*(A.x[j+1]-A.x[j]), y: A.y[i], z: zA00 + r*(zA10-zA00)});
+                                }
+                                if(Math.sign(d01) !== Math.sign(d11)) {
+                                    const r = Math.abs(d01)/(Math.abs(d01)+Math.abs(d11));
+                                    pts.push({x: A.x[j] + r*(A.x[j+1]-A.x[j]), y: A.y[i+1], z: A.z[i+1][j] + r*(A.z[i+1][j+1]-A.z[i+1][j])});
+                                }
+                                if(Math.sign(d00) !== Math.sign(d01)) {
+                                    const r = Math.abs(d00)/(Math.abs(d00)+Math.abs(d01));
+                                    pts.push({x: A.x[j], y: A.y[i] + r*(A.y[i+1]-A.y[i]), z: A.z[i][j] + r*(A.z[i+1][j]-A.z[i][j])});
+                                }
+                                if(Math.sign(d10) !== Math.sign(d11)) {
+                                    const r = Math.abs(d10)/(Math.abs(d10)+Math.abs(d11));
+                                    pts.push({x: A.x[j+1], y: A.y[i] + r*(A.y[i+1]-A.y[i]), z: A.z[i][j+1] + r*(A.z[i+1][j+1]-A.z[i][j+1])});
+                                }
+                                if(pts.length === 2) {
+                                    lineX.push(pts[0].x, pts[1].x, null);
+                                    lineY.push(pts[0].y, pts[1].y, null);
+                                    lineZ.push(pts[0].z, pts[1].z, null);
+                                }
+                            }
+                        }
+                        if(lineX.length>0) traces.push({type:'scatter3d', mode:'lines', x:lineX, y:lineY, z:lineZ, line:{width:this.settings.intersectWidth, color:'#ef4444'}, name:'Int'});
+                    }
+                }
+            }
+            
+            Plotly.newPlot(`plot-${this.id}`, traces, layout, {displayModeBar: false, responsive: true});
+        }
+    }
+
+    toggleMin() { document.getElementById(this.id).classList.toggle('minimized'); this.resize(); }
+}
+
+class Note {
+    constructor(id, data = null) {
+        this.id = id;
+        this.text = data ? data.text : "# Note\nDouble-click to edit.";
+        this.pos = data ? data.pos : {x:200,y:200};
+        const el = document.createElement('div');
+        el.className = 'markdown-note';
+        el.id = this.id;
+        el.style.left = this.pos.x+'px';
+        el.style.top = this.pos.y+'px';
+        el.innerHTML = `<div class="note-header" onmousedown="Drag.start(event, '${this.id}')"><button class="text-xs hover:text-red-500" onclick="this.closest('.markdown-note').remove()">✕</button></div><div class="p-2 h-full overflow-auto prose prose-sm leading-tight view-mode" ondblclick="this.nextElementSibling.classList.remove('hidden');this.classList.add('hidden');this.nextElementSibling.focus()"></div><textarea class="w-full h-full bg-transparent p-2 outline-none hidden resize-none" onblur="App.notes.find(n=>n.id=='${this.id}').update(this.value)" onmousedown="event.stopPropagation()"></textarea>`;
+        document.getElementById('canvas-transform').appendChild(el);
+        App.notes.push(this);
+        this.update(this.text);
+    }
+    update(t) {
+        this.text = t;
+        const el = document.getElementById(this.id);
+        el.querySelector('textarea').value = t;
+        el.querySelector('.view-mode').innerHTML = marked.parse(t);
+        el.querySelector('.view-mode').classList.remove('hidden');
+        el.querySelector('textarea').classList.add('hidden');
+    }
+}
+
+const Drawing={mode:'none',isDrawing:false,paths:[],ctx:null,startP:null,pathPoints:[],init(){this.ctx=document.getElementById('drawing-layer').getContext('2d');this.resize();window.addEventListener('mousedown',e=>this.start(e));window.addEventListener('mousemove',e=>this.draw(e));window.addEventListener('mouseup',()=>this.end());},resize(){this.ctx.canvas.width=5000;this.ctx.canvas.height=5000;this.redraw();},setMode(m){this.mode=m;document.body.style.cursor=m==='none'?'default':'crosshair';document.getElementById('drawing-layer').style.pointerEvents=m==='none'?'none':'auto';},getP(e){const r=document.getElementById('canvas-transform').getBoundingClientRect();return{x:(e.clientX-r.left)/App.canvas.scale,y:(e.clientY-r.top)/App.canvas.scale};},start(e){if(this.mode==='none'||e.target.id!=='drawing-layer')return;this.isDrawing=true;this.startP=this.getP(e);this.pathPoints=[this.startP];},draw(e){if(!this.isDrawing)return;const p=this.getP(e);this.redraw();if(this.mode==='arrow'){this.renderArrow(this.startP,p);}else{this.pathPoints.push(p);this.renderPath(this.pathPoints,this.mode);}},end(){if(!this.isDrawing)return;this.isDrawing=false;const c=document.getElementById('draw-color').value;const lastP=this.getP(event);if(this.mode==='arrow')this.paths.push({type:'arrow',s:this.startP,e:lastP,c});else this.paths.push({type:this.mode,pts:this.pathPoints,c});this.redraw();},redraw(){this.ctx.clearRect(0,0,5000,5000);this.paths.forEach(p=>{if(p.type==='arrow')this.renderArrow(p.s,p.e,p.c);else this.renderPath(p.pts,p.type,p.c);});},renderPath(pts,t,c){if(pts.length<2)return;this.ctx.beginPath();this.ctx.lineWidth=t==='eraser'?20:3;if(t==='eraser'){this.ctx.globalCompositeOperation='destination-out';this.ctx.strokeStyle='rgba(0,0,0,1)';}else{this.ctx.globalCompositeOperation='source-over';this.ctx.strokeStyle=c||document.getElementById('draw-color').value;}this.ctx.moveTo(pts[0].x,pts[0].y);for(let i=1;i<pts.length;i++)this.ctx.lineTo(pts[i].x,pts[i].y);this.ctx.stroke();this.ctx.globalCompositeOperation='source-over';},renderArrow(s,e,c){const h=15,a=Math.atan2(e.y-s.y,e.x-s.x);this.ctx.lineWidth=3;this.ctx.strokeStyle=c||document.getElementById('draw-color').value;this.ctx.globalCompositeOperation='source-over';this.ctx.beginPath();this.ctx.moveTo(s.x,s.y);this.ctx.lineTo(e.x,e.y);this.ctx.lineTo(e.x-h*Math.cos(a-Math.PI/6),e.y-h*Math.sin(a-Math.PI/6));this.ctx.moveTo(e.x,e.y);this.ctx.lineTo(e.x-h*Math.cos(a+Math.PI/6),e.y-h*Math.sin(a+Math.PI/6));this.ctx.stroke();},clear(){this.paths=[];this.redraw();}};
+const Calc={add(v){document.getElementById('calc-display').value+=v},clear(){document.getElementById('calc-display').value='';document.getElementById('calc-res').innerText=''},eval(){try{document.getElementById('calc-res').innerText=math.evaluate(document.getElementById('calc-display').value)}catch{document.getElementById('calc-res').innerText='Error'}}};
+const Drag={
+    target:null,isResizing:false,ghost:null,resizeTarget:null,
+    start(e,id){if(e.target.tagName==='INPUT'||e.target.closest('button'))return;this.target=document.getElementById(id);this.startX=e.clientX;this.startY=e.clientY;this.initL=parseFloat(this.target.style.left);this.initT=parseFloat(this.target.style.top);document.querySelectorAll('.graph-container,.tool-panel,.markdown-note').forEach(x=>x.style.zIndex=10);this.target.style.zIndex=50;window.addEventListener('mousemove',this.move);},
+    startAbsolute(e,id){this.start(e,id);},
+    move:(e)=>{if(!Drag.target)return;const s=Drag.target.classList.contains('tool-panel')?1:App.canvas.scale;Drag.target.style.left=`${Drag.initL+(e.clientX-Drag.startX)/s}px`;Drag.target.style.top=`${Drag.initT+(e.clientY-Drag.startY)/s}px`;},
+    
+    // Ghost Logic
+    resizeStart(e,id){
+        e.stopPropagation();
+        document.querySelectorAll('.ghost-resizer').forEach(el=>el.remove());
+        this.isResizing=true;this.resizeTarget=document.getElementById(id);this.startX=e.clientX;this.startY=e.clientY;
+        this.initW=parseFloat(this.resizeTarget.style.width);
+        this.initH=parseFloat(this.resizeTarget.querySelector('.graph-body').style.height.replace('px',''));
+        
+        this.ghost=document.createElement('div');
+        this.ghost.className='ghost-resizer';
+        this.ghost.style.left=this.resizeTarget.style.left;
+        this.ghost.style.top=this.resizeTarget.style.top;
+        this.ghost.style.width=this.resizeTarget.style.width;
+        this.ghost.style.height=this.resizeTarget.offsetHeight+'px';
+        this.ghost.style.transform=document.getElementById('canvas-transform').style.transform;
+        this.ghost.style.transformOrigin='0 0';
+        document.body.appendChild(this.ghost);
+        
+        window.addEventListener('mousemove',this.resizeMove);
+        window.addEventListener('mouseup',this.resizeEnd);
+    },
+    resizeMove:(e)=>{
+        if(!Drag.isResizing)return;const s=App.canvas.scale;
+        const nw=Math.max(300,Drag.initW+(e.clientX-Drag.startX)/s);
+        const nh=Math.max(200,Drag.initH+(e.clientY-Drag.startY)/s);
+        Drag.ghost.style.width=nw+'px';
+        Drag.ghost.style.height=(nh+44)+'px'; // +header height
+    },
+    resizeEnd:()=>{
+        Drag.isResizing=false;
+        document.querySelectorAll('.ghost-resizer').forEach(el=>el.remove());
+        if(Drag.ghost && Drag.resizeTarget){
+            const finalW=Drag.ghost.style.width;
+            const finalH=(parseFloat(Drag.ghost.style.height)-44)+'px';
+            Drag.resizeTarget.style.width=finalW;
+            Drag.resizeTarget.querySelector('.graph-body').style.height=finalH;
+            App.containers.find(c=>c.id===Drag.resizeTarget.id).resize();
+        }
+        
+        Drag.ghost=null; Drag.resizeTarget=null;
+        window.removeEventListener('mousemove',Drag.resizeMove);
+        window.removeEventListener('mouseup',Drag.resizeEnd);
+    },
+    end:()=>{
+        if (Drag.target) {
+            // SYNC POSITION TO STATE
+            const id = Drag.target.id;
+            const x = parseFloat(Drag.target.style.left);
+            const y = parseFloat(Drag.target.style.top);
+            const container = App.containers.find(c => c.id === id);
+            if (container) { container.pos = {x, y}; }
+            const note = App.notes.find(n => n.id === id);
+            if (note) { note.pos = {x, y}; }
+        }
+        Drag.target=null;
+        window.removeEventListener('mousemove',Drag.move);
+    }
+};
+const Project={save(){const d={containers:App.containers.map(c=>({functions:c.functions,settings:c.settings,pos:c.pos,size:c.size})),notes:App.notes.map(n=>({text:n.text,pos:n.pos})),drawings:Drawing.paths};const b=new Blob([JSON.stringify(d)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='project.json';a.click();},load(i){const r=new FileReader();r.onload=e=>{const d=JSON.parse(e.target.result);document.querySelectorAll('.graph-container,.markdown-note').forEach(x=>x.remove());App.containers=[];App.notes=[];d.containers.forEach(c=>App.createContainer(c));d.notes.forEach(n=>App.createNote(n));if(d.drawings){Drawing.paths=d.drawings;Drawing.redraw();}};if(i.files[0])r.readAsText(i.files[0]);}};
+
+App.init();
+</script>
+</body>
+</html>
