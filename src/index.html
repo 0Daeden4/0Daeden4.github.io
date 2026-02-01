@@ -238,8 +238,15 @@ const Project = {
     getExportData: function() {
         return {
             containers: App.containers.map(c => ({
-                id: c.id, pos: c.pos, size: c.size,
-                functions: c.functions, settings: c.settings
+                id: c.id,
+                name: c.name,
+                pos: c.pos,
+                size: c.size,
+                functions: c.functions,
+                settings: c.settings,
+                defaultVars: c.defaultVars,
+                sliderValues: c.sliderValues,
+                sliderConfigs: c.sliderConfigs
             })),
             notes: App.notes.map(n => ({
                 id: n.id, pos: n.pos, text: n.text
@@ -263,22 +270,43 @@ const Project = {
             try {
                 const data = JSON.parse(e.target.result);
                 Project.loadData(data);
-            } catch(err) { alert('Invalid file'); }
+            } catch(err) { alert('Invalid file'); console.error(err); }
         };
         reader.readAsText(file);
     },
     loadData: function(data) {
-        // Clear existing
         App.containers.forEach(c => { const el=document.getElementById(c.id); if(el)el.remove(); });
         App.containers = [];
         App.notes.forEach(n => { const el=document.getElementById(n.id); if(el)el.remove(); });
         App.notes = [];
         Drawing.clear();
 
-        // Restore
-        if(data.containers) data.containers.forEach(d => App.createContainer(d));
-        if(data.notes) data.notes.forEach(d => App.createNote(d));
+        let maxId = 0;
+        const scanId = (idStr) => {
+            const num = parseInt(idStr.replace('obj_', ''));
+            if(!isNaN(num) && num > maxId) maxId = num;
+        };
+
+        if(data.containers) {
+            data.containers.forEach(d => {
+                scanId(d.id);
+                const c = new GraphContainer(d.id, d);
+                App.containers.push(c);
+            });
+        }
+        if(data.notes) {
+            data.notes.forEach(d => {
+                scanId(d.id);
+                new Note(d.id, d);
+            });
+        }
+
+        App.idCounter = maxId;
+
         if(data.drawing) { Drawing.paths = data.drawing; Drawing.redraw(); }
+
+        State.history = [];
+        State.future = [];
     }
 };
 
@@ -299,7 +327,6 @@ const App = {
             if((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'Z'))) { e.preventDefault(); State.redo(); }
         });
 
-        // Clear loader
         const loader = document.getElementById('loading-overlay');
         if(loader) {
             loader.style.opacity = '0';
@@ -401,16 +428,25 @@ const App = {
 class GraphContainer {
     constructor(id, data = null) {
         this.id = id;
-        this.functions = data ? data.functions : [{ expr: 'sin(x)', visible: true }, { expr: '1', visible: true }];
+        this.name = (data && data.name) ? data.name : `Graph ${id}`;
+
+        this.functions = data ? data.functions : [{ expr: 'sin(x)', visible: true }];
         this.settings = data ? data.settings : {
-            xMin:-5,xMax:5,yMin:-5,yMax:5, grid:false, intersect:true,
-            opacity:App.globalSettings.opacity, labels:{x:'X',y:'Y',z:'Z'},
-            sparsity: 100, aspectRatio: 'cube', intersectWidth: 5
+            xMin: -5, xMax: 5, yMin: -5, yMax: 5, zMin: -5, zMax: 5,
+            grid: false, intersect: true,
+            opacity: App.globalSettings.opacity,
+            labels: {x:'X', y:'Y', z:'Z'},
+            sparsity: 50, aspectRatio: 'cube', intersectWidth: 5
         };
-        // Ensure defaults exist
-        if(!this.settings.labels) this.settings.labels = {x:'X',y:'Y',z:'Z'};
-        if(!this.settings.sparsity) this.settings.sparsity = 100;
+
+        this.defaultVars = data ? data.defaultVars : ['x'];
+        this.sliderValues = data ? data.sliderValues : {};
+        this.sliderConfigs = data ? data.sliderConfigs : {};
+
+        if(!this.settings.labels) this.settings.labels = {x:'X', y:'Y', z:'Z'};
+        if(!this.settings.sparsity) this.settings.sparsity = 50;
         if(!this.settings.intersectWidth) this.settings.intersectWidth = 5;
+        if(this.settings.zMin === undefined) { this.settings.zMin = -5; this.settings.zMax = 5; }
 
         this.pos = data ? data.pos : { x: 100 + App.containers.length*30, y: 100 };
         this.size = data ? data.size : { w: 650, h: 600 };
@@ -424,12 +460,10 @@ class GraphContainer {
     }
 
     isGraph3D() {
-        const active = this.functions.filter(f => f.visible && f.expr.trim());
-        let has3D = false;
-        active.forEach(f => { if(Utils.getVars(f.expr).length >= 2) has3D = true; });
-        return has3D;
+        return this.defaultVars.length >= 2;
     }
 
+    // --- HTML Structure ---
     render() {
         const el = document.createElement('div');
         el.className = 'graph-container'; el.id = this.id;
@@ -438,11 +472,13 @@ class GraphContainer {
         el.innerHTML = `
             <div class="container-header" onmousedown="Drag.start(event, '${this.id}')">
                 <i class="fas fa-cube text-[var(--accent)]"></i>
-                <input type="text" value="Graph ${this.id}" class="header-input" onmousedown="event.stopPropagation()">
+                <input type="text" value="${this.name}" class="header-input"
+                    onchange="App.containers.find(c=>c.id=='${this.id}').updName(this.value)"
+                    onmousedown="event.stopPropagation()">
                 <div class="flex gap-1">
                     <button class="header-btn" onclick="App.containers.find(c=>c.id=='${this.id}').saveImg()"><i class="fas fa-camera"></i></button>
                     <button class="header-btn" onclick="App.containers.find(c=>c.id=='${this.id}').toggleMin()">_</button>
-                    <button class="header-btn" onclick="App.enterFocus('${this.id}')">□</button>
+                    <button class="header-btn" onclick="App.containers.find(c=>c.id=='${this.id}').enterFocus()">□</button>
                     <button class="header-btn danger" onclick="App.removeContainer('${this.id}')">✕</button>
                 </div>
             </div>
@@ -458,26 +494,96 @@ class GraphContainer {
         this.renderSidebar();
     }
 
-    renderSidebar() {
-        const s = document.getElementById(`sidebar-${this.id}`); if(!s) return;
-        s.innerHTML = `<div class="mb-3"><div class="flex justify-between items-center mb-1"><span class="label-text">Functions</span><button class="text-xs text-blue-500" onclick="App.containers.find(c=>c.id=='${this.id}').addFunc()">+ Add</button></div><div id="funcs-${this.id}" class="flex flex-col gap-2"></div></div>
-            <div class="control-group"><div class="flex justify-between cursor-pointer" onclick="document.getElementById('set-${this.id}').classList.toggle('hidden');"><span class="label-text mb-0">Settings</span><i class="fas fa-chevron-down text-xs opacity-50"></i></div><div id="set-${this.id}" class="hidden mt-3 space-y-2">${this.getSettingsHTML()}</div></div>`;
-        this.renderFuncs(`funcs-${this.id}`);
+    updName(val) {
+        State.push();
+        this.name = val;
     }
 
+    // --- Sidebar & UI ---
+    renderSidebar() {
+        const s = document.getElementById(`sidebar-${this.id}`); if(!s) return;
+        s.innerHTML = `
+            <div class="mb-2">
+                <div class="flex justify-between items-center mb-1">
+                    <span class="label-text">Functions</span>
+                    <button class="text-xs text-blue-500" onclick="App.containers.find(c=>c.id=='${this.id}').addFunc()">+ Add</button>
+                </div>
+                <div id="funcs-${this.id}" class="flex flex-col gap-2"></div>
+            </div>
+
+            <div class="control-group">
+                <div class="flex justify-between cursor-pointer" onclick="document.getElementById('vars-${this.id}').classList.toggle('hidden');">
+                    <span class="label-text mb-0">Variables</span><i class="fas fa-chevron-down text-xs opacity-50"></i>
+                </div>
+                <div id="vars-${this.id}" class="mt-2 space-y-2">
+                    <div>
+                        <span class="label-text">Default Variables</span>
+                        <input type="text" class="styled-input" value="${this.defaultVars.join(', ')}" onchange="App.containers.find(c=>c.id=='${this.id}').updDefaultVars(this.value)">
+                    </div>
+                    <div id="sliders-${this.id}" class="flex flex-col gap-2 mt-2"></div>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <div class="flex justify-between cursor-pointer" onclick="document.getElementById('set-${this.id}').classList.toggle('hidden');">
+                    <span class="label-text mb-0">Settings</span><i class="fas fa-chevron-down text-xs opacity-50"></i>
+                </div>
+                <div id="set-${this.id}" class="hidden mt-3 space-y-2">${this.getSettingsHTML()}</div>
+            </div>`;
+
+        this.renderFuncs(`funcs-${this.id}`);
+        this.renderSliders(`sliders-${this.id}`, 'sidebar');
+    }
+
+
     renderFocusControls() {
-        document.getElementById('focus-funcs-list').innerHTML = ''; this.renderFuncs('focus-funcs-list');
-        document.getElementById('focus-settings-area').innerHTML = `<div class="grid grid-cols-2 gap-8">${this.getSettingsHTML(true)}</div>`;
+        document.getElementById('focus-funcs-list').innerHTML = '';
+        document.getElementById('focus-settings-area').innerHTML = '';
+
+        this.renderFuncs('focus-funcs-list');
+
+        document.getElementById('focus-settings-area').innerHTML = `
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 h-full">
+                <div class="flex flex-col gap-4">
+                    <h3 class="font-bold text-lg border-b border-[var(--border)] pb-2">Variables</h3>
+                    <div>
+                        <span class="label-text">Default Variables</span>
+                        <input type="text" class="styled-input w-full" value="${this.defaultVars.join(', ')}" onchange="App.containers.find(c=>c.id=='${this.id}').updDefaultVars(this.value)">
+                        <p class="text-[10px] text-[var(--text-secondary)] mt-1">Separate with commas (e.g. "x, y").</p>
+                    </div>
+                    <div id="focus-sliders" class="flex flex-col gap-2 overflow-y-auto" style="max-height: 300px;"></div>
+                </div>
+                <div class="flex flex-col gap-4">
+                    <h3 class="font-bold text-lg border-b border-[var(--border)] pb-2">Display Settings</h3>
+                    ${this.getSettingsHTML(true)}
+                </div>
+            </div>`;
+
+        this.renderSliders('focus-sliders', 'focus');
     }
 
     getSettingsHTML(exp=false) {
         const is3D = this.isGraph3D();
         const display3D = is3D ? '' : 'style="display:none"';
-        return `<div class="grid grid-cols-3 gap-2 mb-2"><input class="styled-input" placeholder="Lbl X" value="${this.settings.labels.x.replace(/"/g, '&quot;')}" onchange="App.containers.find(c=>c.id=='${this.id}').updLbl('x',this.value)"><input class="styled-input" placeholder="Lbl Y" value="${this.settings.labels.y.replace(/"/g, '&quot;')}" onchange="App.containers.find(c=>c.id=='${this.id}').updLbl('y',this.value)"><input class="styled-input" placeholder="Lbl Z" ${display3D} value="${this.settings.labels.z.replace(/"/g, '&quot;')}" onchange="App.containers.find(c=>c.id=='${this.id}').updLbl('z',this.value)"></div>
-        <div class="${exp?'grid grid-cols-4 gap-4':'grid grid-cols-2 gap-2'}"><div><span class="label-text">Min X</span><input type="number" class="styled-input" value="${this.settings.xMin}" onchange="State.push(); App.containers.find(c=>c.id=='${this.id}').upd('xMin',this.value)"></div><div><span class="label-text">Max X</span><input type="number" class="styled-input" value="${this.settings.xMax}" onchange="State.push(); App.containers.find(c=>c.id=='${this.id}').upd('xMax',this.value)"></div><div><span class="label-text">Min Y</span><input type="number" class="styled-input" value="${this.settings.yMin}" onchange="State.push(); App.containers.find(c=>c.id=='${this.id}').upd('yMin',this.value)"></div><div><span class="label-text">Max Y</span><input type="number" class="styled-input" value="${this.settings.yMax}" onchange="State.push(); App.containers.find(c=>c.id=='${this.id}').upd('yMax',this.value)"></div></div>
-        <div class="grid grid-cols-2 gap-2 mt-2"><div ${display3D}><span class="label-text">Grid Density</span><input type="range" min="10" max="100" step="5" value="${this.settings.sparsity}" class="w-full h-2 bg-gray-300 rounded" oninput="App.containers.find(c=>c.id=='${this.id}').upd('sparsity',this.value)"></div><div><span class="label-text">Int. Width</span><input type="range" min="1" max="20" step="1" value="${this.settings.intersectWidth}" class="w-full h-2 bg-gray-300 rounded" oninput="App.containers.find(c=>c.id=='${this.id}').upd('intersectWidth',this.value)"></div></div>
+        return `<div class="grid grid-cols-3 gap-2 mb-2">
+            <input class="styled-input" placeholder="Lbl X" value="${this.settings.labels.x.replace(/"/g, '&quot;')}" onchange="App.containers.find(c=>c.id=='${this.id}').updLbl('x',this.value)">
+            <input class="styled-input" placeholder="Lbl Y" value="${this.settings.labels.y.replace(/"/g, '&quot;')}" onchange="App.containers.find(c=>c.id=='${this.id}').updLbl('y',this.value)">
+            <input class="styled-input" placeholder="Lbl Z" ${display3D} value="${this.settings.labels.z.replace(/"/g, '&quot;')}" onchange="App.containers.find(c=>c.id=='${this.id}').updLbl('z',this.value)">
+        </div>
+        <div class="${exp?'grid grid-cols-3 gap-4':'grid grid-cols-3 gap-2'}">
+            <div><span class="label-text">Range X</span><div class="flex gap-1"><input type="number" class="styled-input p-1" value="${this.settings.xMin}" onchange="State.push(); App.containers.find(c=>c.id=='${this.id}').upd('xMin',this.value)"><input type="number" class="styled-input p-1" value="${this.settings.xMax}" onchange="State.push(); App.containers.find(c=>c.id=='${this.id}').upd('xMax',this.value)"></div></div>
+            <div><span class="label-text">Range Y</span><div class="flex gap-1"><input type="number" class="styled-input p-1" value="${this.settings.yMin}" onchange="State.push(); App.containers.find(c=>c.id=='${this.id}').upd('yMin',this.value)"><input type="number" class="styled-input p-1" value="${this.settings.yMax}" onchange="State.push(); App.containers.find(c=>c.id=='${this.id}').upd('yMax',this.value)"></div></div>
+            <div ${display3D}><span class="label-text">Range Z</span><div class="flex gap-1"><input type="number" class="styled-input p-1" value="${this.settings.zMin}" onchange="State.push(); App.containers.find(c=>c.id=='${this.id}').upd('zMin',this.value)"><input type="number" class="styled-input p-1" value="${this.settings.zMax}" onchange="State.push(); App.containers.find(c=>c.id=='${this.id}').upd('zMax',this.value)"></div></div>
+        </div>
+        <div class="grid grid-cols-2 gap-2 mt-2">
+            <div><span class="label-text">Grid/Point Density</span><input type="range" min="10" max="150" step="5" value="${this.settings.sparsity}" class="w-full h-2 bg-gray-300 rounded" oninput="App.containers.find(c=>c.id=='${this.id}').upd('sparsity',this.value)"></div>
+            <div><span class="label-text">Int. Size</span><input type="range" min="1" max="20" step="1" value="${this.settings.intersectWidth}" class="w-full h-2 bg-gray-300 rounded" oninput="App.containers.find(c=>c.id=='${this.id}').upd('intersectWidth',this.value)"></div>
+        </div>
         <div class="flex items-center justify-between mb-2 mt-2" ${display3D}><span class="label-text">Aspect Ratio</span><button class="btn-pill text-xs py-1" onclick="App.containers.find(c=>c.id=='${this.id}').toggleAspect()">${this.settings.aspectRatio}</button></div>
-        <div class="flex gap-4"><label class="flex items-center gap-2 text-xs"><input type="checkbox" ${this.settings.grid?'checked':''} onchange="App.containers.find(c=>c.id=='${this.id}').upd('grid',this.checked)"> ${is3D ? 'Grid on Surface' : 'Show Grid'}</label><label class="flex items-center gap-2 text-xs"><input type="checkbox" ${this.settings.intersect?'checked':''} onchange="App.containers.find(c=>c.id=='${this.id}').upd('intersect',this.checked)"> Show Intersections</label></div>`;
+        <div class="flex gap-4">
+            <label class="flex items-center gap-2 text-xs"><input type="checkbox" ${this.settings.grid?'checked':''} onchange="App.containers.find(c=>c.id=='${this.id}').upd('grid',this.checked)"> Show Grid</label>
+            <label class="flex items-center gap-2 text-xs"><input type="checkbox" ${this.settings.intersect?'checked':''} onchange="App.containers.find(c=>c.id=='${this.id}').upd('intersect',this.checked)"> Show Intersections</label>
+        </div>`;
     }
 
     renderFuncs(tid) {
@@ -489,17 +595,109 @@ class GraphContainer {
         });
     }
 
+    // --- Slider Logic ---
+    renderSliders(tid, prefix = 'sidebar') {
+        const div = document.getElementById(tid); if(!div) return; div.innerHTML = '';
+
+        const vars = new Set();
+        this.functions.forEach(f => {
+            if(!f.visible) return;
+            try {
+                const node = math.parse(f.expr);
+                node.filter(n => n.isSymbolNode).forEach(n => {
+                    if(!this.defaultVars.includes(n.name) &&
+                       !['pi','e','sin','cos','tan','sqrt','log','ln','exp','abs'].includes(n.name)) {
+                        vars.add(n.name);
+                    }
+                });
+            } catch(e){}
+        });
+
+        vars.forEach(v => {
+            if(this.sliderValues[v] === undefined) this.sliderValues[v] = 1;
+            if(!this.sliderConfigs[v]) this.sliderConfigs[v] = {min: -10, max: 10, step: 0.1};
+
+            const cfg = this.sliderConfigs[v];
+            const row = document.createElement('div');
+            row.className = 'bg-[var(--bg-input)] border border-[var(--border)] rounded p-2 text-xs';
+
+            const rangeId = `${prefix}-range-${this.id}-${v}`;
+            const numId = `${prefix}-num-${this.id}-${v}`;
+
+            row.innerHTML = `
+                <div class="flex justify-between items-center mb-1">
+                    <span class="font-bold text-[var(--accent)]">${v}</span>
+                    <button onclick="this.parentElement.nextElementSibling.classList.toggle('hidden')"><i class="fas fa-cog"></i></button>
+                </div>
+                <div class="hidden grid grid-cols-3 gap-1 mb-2">
+                    <input type="number" class="styled-input p-0 px-1" value="${cfg.min}" onchange="App.containers.find(c=>c.id=='${this.id}').updSliderCfg('${v}', 'min', this.value)">
+                    <input type="number" class="styled-input p-0 px-1" value="${cfg.max}" onchange="App.containers.find(c=>c.id=='${this.id}').updSliderCfg('${v}', 'max', this.value)">
+                    <input type="number" class="styled-input p-0 px-1" value="${cfg.step}" onchange="App.containers.find(c=>c.id=='${this.id}').updSliderCfg('${v}', 'step', this.value)">
+                </div>
+                <div class="flex items-center gap-2">
+                    <input type="range" id="${rangeId}"
+                        min="${cfg.min}" max="${cfg.max}" step="${cfg.step}"
+                        value="${this.sliderValues[v]}"
+                        class="flex-grow h-2 bg-gray-300 rounded cursor-pointer"
+                        oninput="App.containers.find(c=>c.id=='${this.id}').updSliderVal('${v}', this.value, false)"
+                        onchange="App.containers.find(c=>c.id=='${this.id}').updateGraph()"
+                    >
+                    <input type="number" id="${numId}"
+                        value="${this.sliderValues[v]}"
+                        class="styled-input w-16 text-center"
+                        step="${cfg.step}"
+                        onchange="App.containers.find(c=>c.id=='${this.id}').updSliderVal('${v}', this.value, true)"
+                    >
+                </div>
+            `;
+            div.appendChild(row);
+        });
+    }
+
+    // --- Updates ---
     addFunc(){State.push(); this.functions.push({expr:'',visible:true}); this.refreshUI(); this.updateGraph();}
     delFunc(i){State.push(); this.functions.splice(i,1); this.refreshUI(); this.updateGraph();}
-    toggleFunc(i){this.functions[i].visible=!this.functions[i].visible; this.updateGraph();}
+    toggleFunc(i){this.functions[i].visible=!this.functions[i].visible; this.refreshUI(); this.updateGraph();}
     updFunc(i,v){this.functions[i].expr=v; this.refreshUI(); this.updateGraph();}
+
     upd(k,v){this.settings[k]=(k==='grid'||k==='intersect')?v:parseFloat(v); this.updateGraph();}
     updLbl(k,v){this.settings.labels[k]=v; this.updateGraph();}
+
+    updDefaultVars(v) {
+        State.push();
+        this.defaultVars = v.split(',').map(s=>s.trim()).filter(s=>s);
+        this.refreshUI();
+        this.updateGraph();
+    }
+
+    updSliderVal(name, val, updateGraphBool) {
+        const numVal = parseFloat(val);
+        this.sliderValues[name] = numVal;
+
+        ['sidebar', 'focus'].forEach(prefix => {
+            const rangeEl = document.getElementById(`${prefix}-range-${this.id}-${name}`);
+            const numEl = document.getElementById(`${prefix}-num-${this.id}-${name}`);
+            if (rangeEl) rangeEl.value = numVal;
+            if (numEl) numEl.value = numVal;
+        });
+
+        if (updateGraphBool) {
+            this.updateGraph();
+        }
+    }
+
+    updSliderCfg(name, key, val) {
+        this.sliderConfigs[name][key] = parseFloat(val);
+        this.refreshUI();
+    }
+
     toggleAspect(){this.settings.aspectRatio = this.settings.aspectRatio==='cube'?'data':'cube'; this.refreshUI(); this.updateGraph();}
     refreshUI(){if(App.focusTarget===this)this.renderFocusControls(); else this.renderSidebar();}
+    enterFocus() { App.enterFocus(this.id); }
     saveImg(){Plotly.toImage(document.getElementById(`plot-${this.id}`),{format:'png',height:600,width:800}).then(u=>{const a=document.createElement('a');a.href=u;a.download='graph.png';a.click();});}
     toggleMin(){document.getElementById(this.id).classList.toggle('minimized'); this.resize();}
 
+    // --- Helpers ---
     getThemeData(idx) {
         const p = App.globalSettings.preset;
         if(p==='topo') return { scale: idx%2===0?'Earth':'Picnic', bg:'rgba(0,0,0,0)', font:'#586e75', grid:'#d2b48c' };
@@ -520,36 +718,49 @@ class GraphContainer {
         return ['#6366f1', '#ec4899', '#10b981', '#f59e0b', '#8b5cf6'];
     }
 
+    // --- Core Graphing Logic ---
     updateGraph() {
         const active = this.functions.filter(f => f.visible && f.expr.trim());
         const themeData = this.getThemeData(0);
         const palette = this.getPalette();
-        let has3D = this.isGraph3D();
+        const is3D = this.isGraph3D();
         const traces = [];
         const activeData = [];
 
-        if (!has3D) {
-            // 2D Logic
+        const v1 = this.defaultVars[0] || 'x';
+        const v2 = this.defaultVars[1] || 'y';
+
+        const commonLayout = {
+            autosize: true,
+            margin: {t:0,b:0,l:0,r:0},
+            paper_bgcolor: themeData.bg,
+            plot_bgcolor: themeData.bg,
+            font: { color: themeData.font, family: 'Inter' },
+            uirevision: 'true'
+        };
+
+        if (!is3D) {
+            // --- 2D Logic ---
             const layout = {
-                autosize: true, margin: {t:0,b:0,l:0,r:0}, paper_bgcolor: themeData.bg, plot_bgcolor: themeData.bg,
-                font: { color: themeData.font, family: 'Inter' },
-                xaxis: { title: this.settings.labels.x, color: themeData.font, gridcolor: themeData.grid, showgrid: this.settings.grid },
-                yaxis: { title: this.settings.labels.y, color: themeData.font, gridcolor: themeData.grid, showgrid: this.settings.grid }
+                ...commonLayout,
+                xaxis: { title: this.settings.labels.x, color: themeData.font, gridcolor: themeData.grid, showgrid: this.settings.grid, range: [this.settings.xMin, this.settings.xMax] },
+                yaxis: { title: this.settings.labels.y, color: themeData.font, gridcolor: themeData.grid, showgrid: this.settings.grid, range: [this.settings.yMin, this.settings.yMax] }
             };
-            const step = (this.settings.xMax - this.settings.xMin) / 300;
+
+            const step = (this.settings.xMax - this.settings.xMin) / (this.settings.sparsity * 3);
+
             active.forEach((f, idx) => {
-                const vars = Utils.getVars(f.expr);
-                const vX = vars[0] || 'x';
                 const code = math.compile(f.expr);
                 const xVals=[], yVals=[];
-
-                // Special handling for discrete sums to look like steps
                 const isDiscrete = f.expr.includes('sum(');
                 const lineShape = isDiscrete ? 'hv' : 'linear';
 
-                for(let x=this.settings.xMin; x<=this.settings.xMax; x+=step) {
-                    xVals.push(x);
-                    try { yVals.push(code.evaluate({[vX]: x})); } catch { yVals.push(NaN); }
+                for(let val=this.settings.xMin; val<=this.settings.xMax; val+=step) {
+                    xVals.push(val);
+                    try {
+                        const scope = { [v1]: val, ...this.sliderValues };
+                        yVals.push(code.evaluate(scope));
+                    } catch { yVals.push(NaN); }
                 }
                 activeData.push({x: xVals, y: yVals});
                 traces.push({
@@ -558,7 +769,6 @@ class GraphContainer {
                 });
             });
 
-            // Intersection Logic
             if(this.settings.intersect && activeData.length >= 2) {
                 for(let i=0; i<activeData.length; i++) {
                     for(let j=i+1; j<activeData.length; j++) {
@@ -567,18 +777,13 @@ class GraphContainer {
                         for(let k=0; k<A.x.length-1; k++) {
                             const yA1 = A.y[k]; const yB1 = B.y[k];
                             const yA2 = A.y[k+1]; const yB2 = B.y[k+1];
-                            const diff1 = yA1 - yB1;
-                            const diff2 = yA2 - yB2;
+                            const diff1 = yA1 - yB1; const diff2 = yA2 - yB2;
                             if (Math.sign(diff1) !== Math.sign(diff2)) {
                                 const r = Math.abs(diff1) / (Math.abs(diff1) + Math.abs(diff2));
                                 intX.push(A.x[k] + r * (A.x[k+1] - A.x[k]));
                                 intY.push(yA1 + r * (yA2 - yA1));
                             } else if (Math.abs(diff1) < 0.05) {
-                                // Tangent/Touching Check (Local Minima)
-                                const prevDiff = k > 0 ? Math.abs(A.y[k-1] - B.y[k-1]) : 999;
-                                const nextDiff = Math.abs(diff2);
-                                const currDiff = Math.abs(diff1);
-                                if (currDiff <= prevDiff && currDiff <= nextDiff) {
+                                if (k>0 && Math.abs(A.y[k-1]-B.y[k-1]) >= Math.abs(diff1) && Math.abs(diff2) >= Math.abs(diff1)) {
                                     intX.push(A.x[k]); intY.push(yA1);
                                 }
                             }
@@ -592,49 +797,52 @@ class GraphContainer {
                     }
                 }
             }
-            Plotly.newPlot(`plot-${this.id}`, traces, layout, {displayModeBar: false, responsive: true});
+            Plotly.react(`plot-${this.id}`, traces, layout, {displayModeBar: false, responsive: true});
 
         } else {
-            // 3D Logic
+            // --- 3D Logic ---
             const layout = {
-                autosize: true, margin: {t:0,b:0,l:0,r:0}, paper_bgcolor: themeData.bg, plot_bgcolor: themeData.bg,
-                font: { color: themeData.font, family: 'Inter' },
-                xaxis: { title: this.settings.labels.x, color: themeData.font, gridcolor: themeData.grid },
-                yaxis: { title: this.settings.labels.y, color: themeData.font, gridcolor: themeData.grid },
+                ...commonLayout,
                 scene: {
-                    xaxis: { title: this.settings.labels.x, color: themeData.font, gridcolor: themeData.grid },
-                    yaxis: { title: this.settings.labels.y, color: themeData.font, gridcolor: themeData.grid },
-                    zaxis: { title: this.settings.labels.z, color: themeData.font, gridcolor: themeData.grid },
-                    aspectmode: this.settings.aspectRatio||'cube'
+                    xaxis: { title: this.settings.labels.x, color: themeData.font, gridcolor: themeData.grid, range:[this.settings.xMin, this.settings.xMax] },
+                    yaxis: { title: this.settings.labels.y, color: themeData.font, gridcolor: themeData.grid, range:[this.settings.yMin, this.settings.yMax] },
+                    zaxis: { title: this.settings.labels.z, color: themeData.font, gridcolor: themeData.grid, range:[this.settings.zMin, this.settings.zMax] },
+                    aspectmode: this.settings.aspectRatio||'cube',
                 }
             };
 
             const active3DData = [];
+            const steps = parseInt(this.settings.sparsity);
 
             active.forEach((f, idx) => {
                 try {
-                    const vars = Utils.getVars(f.expr);
                     const code = math.compile(f.expr);
-                    const steps = parseInt(this.settings.sparsity);
                     const xs = (this.settings.xMax-this.settings.xMin)/steps;
                     const ys = (this.settings.yMax-this.settings.yMin)/steps;
-                    const is2D = vars.length < 2; const vX = vars[0]||'x'; const vY = vars[1]||'y';
-                    const xD=[], yD=[], zD=[];
 
-                    for(let y=this.settings.yMin; y<=this.settings.yMax; y+=ys) {
-                        const zRow=[]; yD.push(y);
-                        for(let x=this.settings.xMin; x<=this.settings.xMax; x+=xs) {
-                            if(y===this.settings.yMin) xD.push(x);
+                    const xData=[], yData=[], zData=[];
+
+                    for(let yVal=this.settings.yMin; yVal<=this.settings.yMax; yVal+=ys) {
+                        const zRow=[]; yData.push(yVal);
+
+                        for(let xVal=this.settings.xMin; xVal<=this.settings.xMax; xVal+=xs) {
+                            if(yVal===this.settings.yMin) xData.push(xVal);
                             try {
-                                const val = is2D ? code.evaluate({[vX]:x}) : code.evaluate({[vX]:x, [vY]:y});
+                                const scope = {
+                                    [v1]: xVal,
+                                    [v2]: yVal,
+                                    ...this.sliderValues
+                                };
+                                const val = code.evaluate(scope);
                                 zRow.push(val);
                             } catch { zRow.push(NaN); }
-                        } zD.push(zRow);
+                        }
+                        zData.push(zRow);
                     }
-                    active3DData.push({x:xD, y:yD, z:zD});
+                    active3DData.push({x:xData, y:yData, z:zData});
 
                     traces.push({
-                        type: 'surface', x: xD, y: yD, z: zD,
+                        type: 'surface', x: xData, y: yData, z: zData,
                         colorscale: this.getThemeData(idx).scale, opacity: this.settings.opacity, showscale: false,
                         contours: {
                             x: {show:this.settings.grid, color: App.theme==='dark'?'rgba(255,255,255,0.2)':'rgba(0,0,0,0.2)', start:this.settings.xMin, end:this.settings.xMax, size: xs},
@@ -644,40 +852,48 @@ class GraphContainer {
                 } catch(e) {}
             });
 
+            // 3D Intersections
             if(this.settings.intersect && active3DData.length >= 2) {
                 for(let aIdx = 0; aIdx < active3DData.length; aIdx++) {
                     for(let bIdx = aIdx + 1; bIdx < active3DData.length; bIdx++) {
                         const A = active3DData[aIdx]; const B = active3DData[bIdx];
-                        const lineX=[], lineY=[], lineZ=[];
+                        const ptX=[], ptY=[], ptZ=[];
+
                         for(let i=0; i<A.y.length-1; i++) {
                             for(let j=0; j<A.x.length-1; j++) {
-                                const zA00 = A.z[i][j];   const zB00 = B.z[i][j];
-                                if(isNaN(zA00)||isNaN(zB00)) continue;
-                                const d00 = zA00 - zB00;
-                                const d10 = (A.z[i][j+1]||zA00) - (B.z[i][j+1]||zB00);
-                                const d01 = (A.z[i+1]?.[j]||zA00) - (B.z[i+1]?.[j]||zB00);
+                                const zA = A.z[i][j]; const zB = B.z[i][j];
+                                if(isNaN(zA)||isNaN(zB)) continue;
 
-                                const pts = [];
+                                const d00 = zA - zB;
+                                const d10 = (A.z[i][j+1]||zA) - (B.z[i][j+1]||zB);
+                                const d01 = (A.z[i+1]?.[j]||zA) - (B.z[i+1]?.[j]||zB);
+
                                 if(Math.sign(d00) !== Math.sign(d10)) {
                                     const r = Math.abs(d00)/(Math.abs(d00)+Math.abs(d10));
-                                    pts.push({x: A.x[j] + r*(A.x[j+1]-A.x[j]), y: A.y[i], z: zA00 + r*(A.z[i][j+1]-zA00)});
+                                    ptX.push(A.x[j] + r*(A.x[j+1]-A.x[j]));
+                                    ptY.push(A.y[i]);
+                                    ptZ.push(zA + r*((A.z[i][j+1]||zA)-zA));
                                 }
                                 if(Math.sign(d00) !== Math.sign(d01)) {
                                     const r = Math.abs(d00)/(Math.abs(d00)+Math.abs(d01));
-                                    pts.push({x: A.x[j], y: A.y[i] + r*(A.y[i+1]-A.y[i]), z: zA00 + r*((A.z[i+1]?.[j]||zA00)-zA00)});
-                                }
-                                if(pts.length === 2) {
-                                    lineX.push(pts[0].x, pts[1].x, null);
-                                    lineY.push(pts[0].y, pts[1].y, null);
-                                    lineZ.push(pts[0].z, pts[1].z, null);
+                                    ptX.push(A.x[j]);
+                                    ptY.push(A.y[i] + r*(A.y[i+1]-A.y[i]));
+                                    ptZ.push(zA + r*((A.z[i+1]?.[j]||zA)-zA));
                                 }
                             }
                         }
-                        if(lineX.length>0) traces.push({type:'scatter3d', mode:'lines', x:lineX, y:lineY, z:lineZ, line:{width:this.settings.intersectWidth, color:'#ef4444'}, name:'Int'});
+                        if(ptX.length > 0) {
+                            traces.push({
+                                type:'scatter3d', mode:'markers',
+                                x:ptX, y:ptY, z:ptZ,
+                                marker:{size: this.settings.intersectWidth/2, color:'#ef4444'},
+                                name:'Int'
+                            });
+                        }
                     }
                 }
             }
-            Plotly.newPlot(`plot-${this.id}`, traces, layout, {displayModeBar: false, responsive: true});
+            Plotly.react(`plot-${this.id}`, traces, layout, {displayModeBar: false, responsive: true});
         }
     }
 }
