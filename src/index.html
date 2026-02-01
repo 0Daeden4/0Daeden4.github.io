@@ -699,15 +699,25 @@ class GraphContainer {
 
     // --- Helpers ---
     getThemeData(idx) {
+	const zMin = this.settings ? parseFloat(this.settings.zMin) : undefined;
+        const zMax = this.settings ? parseFloat(this.settings.zMax) : undefined;
         const p = App.globalSettings.preset;
-        if(p==='topo') return { scale: idx%2===0?'Earth':'Picnic', bg:'rgba(0,0,0,0)', font:'#586e75', grid:'#d2b48c' };
-        if(p==='matrix') return { scale: idx%2===0 ? [[0,'black'],[1,'#0f0']] : [[0,'black'],[1,'#003300']], bg:'rgba(0,0,0,0)', font:'#0f0', grid:'#003300' };
-        if(p==='sunset') return { scale: idx%2===0 ? 'Hot' : 'Portland', bg:'rgba(0,0,0,0)', font:'#1e293b', grid:'#e2e8f0' };
-        if(p==='ocean') return { scale: idx%2===0 ? 'Tealgrn' : 'Blues', bg:'rgba(0,0,0,0)', font:'#06b6d4', grid:'#164e63' };
-        if(p==='blueprint') return { scale: 'Blues', bg:'rgba(0,0,0,0)', font:'#bfdbfe', grid:'#1e3a8a' };
-        if(p==='neon') return { scale: idx%2===0?'Electric':'Picnic', bg:'rgba(0,0,0,0)', font:'#4ade80', grid:'#111827' };
+	const buildTheme = (scale, bg, font, grid) => ({
+            scale: scale,
+            bg: bg,
+            font: font,
+            grid: grid,
+            cmin: zMin,
+            cmax: zMax
+        });
+	if (p === 'topo') return buildTheme(idx % 2 === 0 ? 'Earth' : 'Picnic', 'rgba(0,0,0,0)', '#586e75', '#d2b48c');
+        if (p === 'matrix') return buildTheme(idx % 2 === 0 ? [[0, 'black'], [1, '#0f0']] : [[0, 'black'], [1, '#003300']], 'rgba(0,0,0,0)', '#0f0', '#003300');
+        if (p === 'sunset') return buildTheme(idx % 2 === 0 ? 'Hot' : 'Portland', 'rgba(0,0,0,0)', '#1e293b', '#e2e8f0');
+        if (p === 'ocean') return buildTheme(idx % 2 === 0 ? 'Tealgrn' : 'Blues', 'rgba(0,0,0,0)', '#06b6d4', '#164e63');
+        if (p === 'blueprint') return buildTheme('Blues', 'rgba(0,0,0,0)', '#bfdbfe', '#1e3a8a');
+        if (p === 'neon') return buildTheme(idx % 2 === 0 ? 'Electric' : 'Picnic', 'rgba(0,0,0,0)', '#4ade80', '#111827');
         const scales = ['Viridis', 'Plasma', 'Magma', 'Inferno'];
-        return { scale: scales[idx%scales.length], bg:'rgba(0,0,0,0)', font: App.theme==='dark'?'#f1f5f9':'#1e293b', grid: App.theme==='dark'?'#475569':'#e2e8f0' };
+        return buildTheme(scales[idx % scales.length], 'rgba(0,0,0,0)', App.theme === 'dark' ? '#f1f5f9' : '#1e293b', App.theme === 'dark' ? '#475569' : '#e2e8f0');
     }
 
     getPalette() {
@@ -840,10 +850,11 @@ class GraphContainer {
                         zData.push(zRow);
                     }
                     active3DData.push({x:xData, y:yData, z:zData});
+		    const theme = this.getThemeData(idx);
 
                     traces.push({
                         type: 'surface', x: xData, y: yData, z: zData,
-                        colorscale: this.getThemeData(idx).scale, opacity: this.settings.opacity, showscale: false,
+                        colorscale: theme.scale, opacity: this.settings.opacity, showscale: false, cmin: theme.cmin, cmax: theme.cmax,
                         contours: {
                             x: {show:this.settings.grid, color: App.theme==='dark'?'rgba(255,255,255,0.2)':'rgba(0,0,0,0.2)', start:this.settings.xMin, end:this.settings.xMax, size: xs},
                             y: {show:this.settings.grid, color: App.theme==='dark'?'rgba(255,255,255,0.2)':'rgba(0,0,0,0.2)', start:this.settings.yMin, end:this.settings.yMax, size: ys}
