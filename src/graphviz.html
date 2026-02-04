@@ -1,0 +1,1141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Graphing Workspace</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjs/12.3.0/math.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<style>
+        /* --- CSS Variables --- */
+        :root {
+            --bg-canvas: #f1f5f9; --bg-panel: #ffffff; --bg-header: #e2e8f0; --bg-input: #f8fafc;
+            --border: #cbd5e1; --text-primary: #1e293b; --text-secondary: #64748b;
+            --accent: #6366f1; --danger: #ef4444;
+            --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            --note-bg: #fef9c3; --note-border: #fde047; --note-text: #854d0e;
+        }
+        body.dark {
+            --bg-canvas: #0f172a; --bg-panel: #1e293b; --bg-header: #334155; --bg-input: #0f172a;
+            --border: #475569; --text-primary: #f1f5f9; --text-secondary: #94a3b8;
+            --accent: #818cf8; --danger: #f87171;
+            --shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+            --note-bg: #422006; --note-border: #713f12; --note-text: #fefce8;
+        }
+        body { background-color: var(--bg-canvas); color: var(--text-primary); font-family: 'Inter', sans-serif; overflow: hidden; user-select: none; transition: background-color 0.3s; }
+
+        /* --- Cursors --- */
+        body.mode-pen #drawing-layer { cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>') 0 24, auto; }
+        body.mode-eraser #drawing-layer { cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="white" stroke="black" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="4" ry="4"></rect></svg>') 12 12, auto; }
+        body.mode-arrow #drawing-layer { cursor: crosshair; }
+
+        /* --- Layout --- */
+        #canvas-wrapper { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; overflow: hidden; cursor: grab; }
+        #canvas-wrapper:active { cursor: grabbing; }
+
+        #canvas-transform { transform-origin: 0 0; position: absolute; top: 0; left: 0; pointer-events: none; }
+        #drawing-layer { position: absolute; top: 0; left: 0; pointer-events: none; z-index: 5; }
+
+        .ghost-resizer { position: absolute; border: 2px dashed var(--accent); background: rgba(99, 102, 241, 0.15); z-index: 99999; pointer-events: none; border-radius: 12px; box-sizing: border-box; }
+
+        /* --- Components --- */
+        .glass-panel { background: var(--bg-panel); border: 1px solid var(--border); box-shadow: var(--shadow); border-radius: 12px; pointer-events: auto; }
+        .btn-pill { background: var(--bg-input); border: 1px solid var(--border); padding: 6px 14px; border-radius: 99px; font-size: 0.85rem; cursor: pointer; display: flex; align-items: center; gap: 8px; transition: 0.2s; }
+        .btn-pill:hover { background: var(--bg-header); transform: translateY(-1px); }
+        .btn-primary { background: var(--accent); color: white; border-color: var(--accent); }
+
+        /* --- Graph Container --- */
+        .graph-container { position: absolute; background: var(--bg-panel); border: 1px solid var(--border); box-shadow: var(--shadow); border-radius: 12px; display: flex; flex-direction: column; width: 650px; z-index: 10; pointer-events: auto; }
+        .container-header { height: 44px; background: var(--bg-header); border-bottom: 1px solid var(--border); border-radius: 12px 12px 0 0; display: flex; align-items: center; padding: 0 12px; gap: 8px; cursor: move; flex-shrink: 0; }
+        .header-input { background: transparent; border: none; outline: none; color: var(--text-primary); font-weight: 600; flex-grow: 1; }
+        .header-btn { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 6px; cursor: pointer; transition: 0.2s; }
+        .header-btn:hover { background: rgba(0,0,0,0.1); }
+        .header-btn.danger:hover { background: var(--danger); color: white; }
+
+        .graph-body { display: flex; flex-direction: column; height: 500px; position: relative; overflow: hidden; }
+        .plot-area { flex: 1 1 0; min-height: 0; width: 100%; position: relative; }
+        .sidebar { flex: 0 0 auto; background: var(--bg-panel); border-top: 1px solid var(--border); padding: 12px; overflow-y: auto; max-height: 350px; z-index: 20; position: relative; }
+
+        /* --- Focus Page --- */
+        #focus-page { position: fixed; inset: 0; background: var(--bg-canvas); z-index: 5000; display: flex; flex-direction: column; transform: translateY(100%); transition: transform 0.3s ease-in-out; overflow-y: auto; pointer-events: auto; }
+        #focus-page.active { transform: translateY(0); }
+        #focus-graph-wrapper { background: var(--bg-panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; display: flex; flex-direction: column; resize: vertical; min-height: 500px; height: 60vh; width: 100%; position: relative; }
+        #focus-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; width: 100%; max-width: 1400px; margin-top: 20px; }
+        .focus-section { background: var(--bg-panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+
+        /* --- Help Modal --- */
+        #help-modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 500px; max-width: 90vw; background: var(--bg-panel); border: 1px solid var(--border); border-radius: 16px; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04); z-index: 6000; display: none; flex-direction: column; pointer-events: auto; }
+        #help-modal.active { display: flex; }
+        .help-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
+        .help-code { font-family: monospace; background: var(--bg-input); padding: 2px 6px; border-radius: 4px; color: var(--accent); }
+
+        /* --- Panels & Inputs --- */
+        .tool-panel { position: fixed; z-index: 2000; padding: 16px; width: 260px; pointer-events: auto; }
+        .settings-drawer { position: fixed; top: 80px; right: 20px; width: 280px; z-index: 2000; transform: translateX(350px); transition: transform 0.3s; pointer-events: auto; }
+        .settings-drawer.open { transform: translateX(0); }
+        .control-group { background: var(--bg-input); border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-bottom: 8px; }
+        .styled-input { background: var(--bg-panel); border: 1px solid var(--border); color: var(--text-primary); padding: 4px 8px; border-radius: 4px; width: 100%; font-size: 0.85rem; outline: none; }
+        .label-text { font-size: 0.7rem; text-transform: uppercase; font-weight: 700; color: var(--text-secondary); margin-bottom: 4px; display: block; }
+        .calc-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-top: 8px; }
+        .calc-btn { background: var(--bg-input); border: 1px solid var(--border); padding: 8px; border-radius: 6px; cursor: pointer; }
+        .calc-btn:hover { background: var(--bg-header); }
+        .theme-chip { border: 2px solid var(--border); border-radius: 8px; padding: 8px; cursor: pointer; text-align: center; font-size: 0.75rem; font-weight: bold; transition: 0.2s; }
+        .theme-chip:hover { border-color: var(--accent); transform: scale(1.02); }
+
+        /* --- Notes --- */
+        .markdown-note { position: absolute; width: 240px; min-height: 180px; background: var(--note-bg); border: 1px solid var(--note-border); color: var(--note-text); border-radius: 8px; z-index: 15; display: flex; flex-direction: column; pointer-events: auto; }
+        .note-header { cursor: move; padding: 6px; display: flex; justify-content: flex-end; background: rgba(0,0,0,0.05); }
+        .resize-handle { position: absolute; bottom: 0; right: 0; width: 16px; height: 16px; cursor: se-resize; z-index: 20; }
+        .hidden { display: none !important; }
+        .minimized { height: auto !important; } .minimized .graph-body { display: none; }
+
+        #loading-overlay { position: fixed; inset: 0; background: var(--bg-canvas); z-index: 9999; display: flex; align-items: center; justify-content: center; font-weight: bold; transition: opacity 0.5s; font-size: 1.2rem; pointer-events: auto; }
+    </style>
+</head>
+<body class="light">
+
+<div id="loading-overlay">Initializing Workspace...</div>
+
+<div id="canvas-wrapper"><div id="canvas-transform"><canvas id="drawing-layer"></canvas></div></div>
+
+<div id="focus-page">
+    <div class="h-16 bg-[var(--bg-header)] border-b border-[var(--border)] flex items-center px-6 justify-between flex-shrink-0 sticky top-0 z-50">
+        <div class="flex items-center gap-3"><i class="fas fa-expand text-[var(--accent)] text-xl"></i><span class="font-bold text-xl" id="focus-title">Focus View</span></div>
+        <div class="flex gap-3"><button class="btn-pill" onclick="App.focusTarget.saveImg()"><i class="fas fa-camera"></i> Snapshot</button><button class="btn-pill" onclick="App.exitFocus()"><i class="fas fa-arrow-left"></i> Back</button></div>
+    </div>
+    <div class="flex flex-col items-center p-8 w-full flex-grow">
+        <div id="focus-graph-wrapper"><div id="focus-plot-area" class="w-full h-full"></div><div class="absolute bottom-0 w-full h-2 cursor-ns-resize bg-[var(--border)] opacity-50 hover:opacity-100"></div></div>
+        <div id="focus-grid">
+            <div class="focus-section"><h3 class="text-lg font-bold mb-4 border-b border-[var(--border)] pb-2">Functions</h3><div id="focus-funcs-list" class="flex flex-col gap-2"></div><button class="btn-pill mt-4 justify-center w-full" onclick="App.focusTarget.addFunc()">+ Add Function</button></div>
+            <div class="focus-section"><h3 class="text-lg font-bold mb-4 border-b border-[var(--border)] pb-2">Settings</h3><div id="focus-settings-area"></div></div>
+        </div>
+    </div>
+</div>
+
+<div id="main-toolbar" class="fixed top-4 left-1/2 -translate-x-1/2 z-50 flex gap-2 glass-panel p-2 rounded-full pointer-events-auto">
+    <button class="btn-pill btn-primary" onclick="State.push(); App.createContainer()"><i class="fas fa-plus"></i> Graph</button>
+    <button class="btn-pill" onclick="State.push(); App.createNote()"><i class="fas fa-sticky-note"></i></button>
+    <div class="w-px bg-gray-300 dark:bg-gray-600 mx-1"></div>
+    <button class="btn-pill" onclick="App.toggleDrawer()"><i class="fas fa-cog"></i></button>
+    <button class="btn-pill" onclick="App.toggleTool('calculator')"><i class="fas fa-calculator"></i></button>
+    <button class="btn-pill" onclick="App.toggleTool('drawing-panel')"><i class="fas fa-pen"></i></button>
+    <button class="btn-pill" onclick="App.toggleTheme()"><i class="fas fa-adjust"></i></button>
+    <div class="w-px bg-gray-300 dark:bg-gray-600 mx-1"></div>
+    <button class="btn-pill" onclick="State.undo()" title="Undo (Ctrl+Z)"><i class="fas fa-undo"></i></button>
+    <button class="btn-pill" onclick="State.redo()" title="Redo (Ctrl+Y)"><i class="fas fa-redo"></i></button>
+    <button class="btn-pill" onclick="document.getElementById('help-modal').classList.add('active')" title="Syntax Help"><i class="fas fa-question"></i></button>
+    <div class="w-px bg-gray-300 dark:bg-gray-600 mx-1"></div>
+    <button class="btn-pill" onclick="Project.save()"><i class="fas fa-save"></i></button>
+    <button class="btn-pill" onclick="document.getElementById('upload').click()"><i class="fas fa-folder-open"></i></button>
+    <input type="file" id="upload" class="hidden" onchange="Project.load(this)">
+</div>
+
+<div id="help-modal">
+    <div class="flex justify-between items-center p-4 border-b border-[var(--border)]">
+        <span class="font-bold text-lg">Math Syntax Guide</span>
+        <button onclick="document.getElementById('help-modal').classList.remove('active')">✕</button>
+    </div>
+    <div class="p-4 overflow-y-auto" style="max-height: 400px;">
+        <div class="help-row"><span>Integral (Area)</span> <span class="help-code">integral("x^2", "x", 0, 1)</span></div>
+        <div class="help-row"><span>Variable Sum</span> <span class="help-code">sum("k", "k", 1, x)</span></div>
+        <div class="help-row"><span>Natural Log</span> <span class="help-code">ln(x)</span></div>
+        <div class="help-row"><span>Log Base 10</span> <span class="help-code">log(x)</span></div>
+        <div class="help-row"><span>Square Root</span> <span class="help-code">sqrt(x)</span></div>
+        <div class="help-row"><span>3D Surface</span> <span class="help-code">(x*y)/2</span></div>
+        <div class="mt-4 text-sm text-[var(--text-secondary)]">
+            <p><strong>Note:</strong> Integrals and Sums can be graphed! Use 'x' as the upper bound.</p>
+        </div>
+    </div>
+</div>
+
+<div id="settings-drawer" class="settings-drawer glass-panel p-4">
+    <div class="flex justify-between items-center mb-4"><span class="font-bold">Global Settings</span><button onclick="App.toggleDrawer()" class="text-xs">✕</button></div>
+    <div class="mb-4"><span class="label-text">Global Opacity</span><input type="range" min="0.1" max="1" step="0.1" value="0.8" class="w-full h-2 bg-gray-300 rounded appearance-none" oninput="App.setGlobalOpacity(this.value)"></div>
+    <span class="label-text">Graph Themes</span>
+    <div class="grid grid-cols-2 gap-2 mt-2">
+        <div class="theme-chip bg-gray-100 text-gray-800" onclick="App.setGlobalTheme('default')">Default</div>
+        <div class="theme-chip bg-blue-900 text-blue-100" onclick="App.setGlobalTheme('blueprint')">Blueprint</div>
+        <div class="theme-chip bg-black text-green-400 border-green-800" onclick="App.setGlobalTheme('matrix')">Matrix</div>
+        <div class="theme-chip bg-[#fdf6e3] text-[#586e75] border-[#d2b48c]" onclick="App.setGlobalTheme('topo')">Topographical</div>
+        <div class="theme-chip bg-gradient-to-r from-orange-400 to-pink-500 text-white" onclick="App.setGlobalTheme('sunset')">Sunset</div>
+        <div class="theme-chip bg-teal-900 text-cyan-300" onclick="App.setGlobalTheme('ocean')">Ocean</div>
+    </div>
+</div>
+
+<div id="calculator" class="tool-panel glass-panel hidden" style="top: 100px; right: 20px;">
+    <div class="flex justify-between items-center mb-2 cursor-move" onmousedown="Drag.startAbsolute(event, 'calculator')"><span class="font-bold text-sm">Calculator</span><button onclick="App.toggleTool('calculator')">✕</button></div>
+    <input type="text" id="calc-display" class="w-full mb-1 p-2 text-right font-mono bg-transparent border-b border-[var(--border)] outline-none"><div id="calc-res" class="text-xs text-right h-4 mb-2 opacity-70"></div>
+    <div class="calc-grid">
+        <button class="calc-btn" onclick="Calc.add('sin(')">sin</button><button class="calc-btn" onclick="Calc.add('cos(')">cos</button><button class="calc-btn" onclick="Calc.add('tan(')">tan</button><button class="calc-btn text-[var(--danger)]" onclick="Calc.clear()">C</button>
+        <button class="calc-btn" onclick="Calc.add('sqrt(')">√</button><button class="calc-btn" onclick="Calc.add('^')">^</button><button class="calc-btn" onclick="Calc.add('(')">(</button><button class="calc-btn" onclick="Calc.add(')')">)</button>
+        <button class="calc-btn" onclick="Calc.add('7')">7</button><button class="calc-btn" onclick="Calc.add('8')">8</button><button class="calc-btn" onclick="Calc.add('9')">9</button><button class="calc-btn" onclick="Calc.add('/')">÷</button>
+        <button class="calc-btn" onclick="Calc.add('4')">4</button><button class="calc-btn" onclick="Calc.add('5')">5</button><button class="calc-btn" onclick="Calc.add('6')">6</button><button class="calc-btn" onclick="Calc.add('*')">×</button>
+        <button class="calc-btn" onclick="Calc.add('1')">1</button><button class="calc-btn" onclick="Calc.add('2')">2</button><button class="calc-btn" onclick="Calc.add('3')">3</button><button class="calc-btn" onclick="Calc.add('-')">-</button>
+        <button class="calc-btn" onclick="Calc.add('0')">0</button><button class="calc-btn" onclick="Calc.add('.')">.</button><button class="calc-btn bg-[var(--accent)] text-white" onclick="Calc.eval()">=</button><button class="calc-btn" onclick="Calc.add('+')">+</button>
+        <button class="calc-btn text-xs col-span-2" onclick="Calc.add('integral(\'\', \'x\', 0, 1)')">∫ Integral</button><button class="calc-btn text-xs col-span-2" onclick="Calc.add('sum(\'\', \'i\', 1, 5)')">Σ Sum</button>
+    </div>
+</div>
+
+<div id="drawing-panel" class="tool-panel glass-panel hidden" style="bottom: 20px; right: 20px;">
+    <div class="flex justify-between items-center mb-2 cursor-move" onmousedown="Drag.startAbsolute(event, 'drawing-panel')"><span class="font-bold text-sm">Drawing</span><button onclick="App.toggleTool('drawing-panel')">✕</button></div>
+    <div class="grid grid-cols-2 gap-2 mb-3"><button class="calc-btn text-xs" onclick="Drawing.setMode('none')">Select</button><button class="calc-btn text-xs" onclick="Drawing.setMode('pen')">Pen</button><button class="calc-btn text-xs" onclick="Drawing.setMode('arrow')">Arrow</button><button class="calc-btn text-xs" onclick="Drawing.setMode('eraser')">Eraser</button></div>
+    <div class="flex items-center gap-2 border-t border-[var(--border)] pt-2"><input type="color" id="draw-color" value="#ef4444" class="h-6 w-6 border-0 bg-transparent cursor-pointer"><button class="calc-btn text-xs ml-auto text-[var(--danger)]" onclick="Drawing.clear()">Clear</button></div>
+</div>
+
+<script>
+// --- GLOBAL ERROR HANDLING ---
+window.onerror = function(message, source, lineno, colno, error) {
+    console.error("Global Error:", message, error);
+    const overlay = document.getElementById('loading-overlay');
+    if (overlay) overlay.innerHTML = "Critical Error: " + message;
+};
+
+// --- UTILS ---
+const Utils = {
+    getVars: function(expr) {
+        try {
+            return [...new Set(math.parse(expr).filter(n=>n.isSymbolNode).map(n=>n.name))].filter(s=>!['pi','e','sin','cos','tan','sqrt','log','ln','exp','sum','integral'].includes(s));
+        } catch(e){ return ['x']; }
+    }
+};
+
+// --- STATE MANAGEMENT ---
+const State = {
+    history: [], future: [],
+    push: function() {
+        const currentData = Project.getExportData();
+        const currentString = JSON.stringify(currentData);
+
+
+        if (this.history.length > 0 && this.history[this.history.length - 1] === currentString) {
+            return;
+        }
+
+        this.history.push(currentString);
+        if(this.history.length > 500) this.history.shift();
+        this.future = [];
+    },
+    undo: function() {
+        if(this.history.length === 0) return;
+        this.future.push(JSON.stringify(Project.getExportData()));
+        const prev = JSON.parse(this.history.pop());
+        Project.loadData(prev);
+    },
+    redo: function() {
+        if(this.future.length === 0) return;
+        this.history.push(JSON.stringify(Project.getExportData()));
+        const next = JSON.parse(this.future.pop());
+        Project.loadData(next);
+    }
+};
+
+// --- PROJECT SAVE/LOAD ---
+const Project = {
+    getExportData: function() {
+        return {
+            containers: App.containers.map(c => ({
+                id: c.id,
+                name: c.name,
+                pos: c.pos,
+                size: c.size,
+                functions: c.functions,
+                settings: c.settings,
+                defaultVars: c.defaultVars,
+                sliderValues: c.sliderValues,
+                sliderConfigs: c.sliderConfigs
+            })),
+            notes: App.notes.map(n => ({
+                id: n.id, pos: n.pos, text: n.text
+            })),
+            drawing: Drawing.paths
+        };
+    },
+    save: function() {
+        const data = JSON.stringify(this.getExportData());
+        const blob = new Blob([data], {type: 'application/json'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = 'workspace.json';
+        a.click();
+    },
+    load: function(input) {
+        const file = input.files[0];
+        if(!file) return;
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            try {
+                const data = JSON.parse(e.target.result);
+                Project.loadData(data);
+            } catch(err) { alert('Invalid file'); console.error(err); }
+        };
+        reader.readAsText(file);
+    },
+    loadData: function(data) {
+        App.containers.forEach(c => { const el=document.getElementById(c.id); if(el)el.remove(); });
+        App.containers = [];
+        App.notes.forEach(n => { const el=document.getElementById(n.id); if(el)el.remove(); });
+        App.notes = [];
+        Drawing.clear();
+
+        let maxId = 0;
+        const scanId = (idStr) => {
+            const num = parseInt(idStr.replace('obj_', ''));
+            if(!isNaN(num) && num > maxId) maxId = num;
+        };
+
+        if(data.containers) {
+            data.containers.forEach(d => {
+                scanId(d.id);
+                const c = new GraphContainer(d.id, d);
+                App.containers.push(c);
+            });
+        }
+        if(data.notes) {
+            data.notes.forEach(d => {
+                scanId(d.id);
+                new Note(d.id, d);
+            });
+        }
+
+        App.idCounter = maxId;
+
+        if(data.drawing) { Drawing.paths = data.drawing; Drawing.redraw(); }
+
+        State.history = [];
+        State.future = [];
+    }
+};
+
+// --- MAIN APPLICATION ---
+const App = {
+    containers: [], notes: [], idCounter: 0, theme: 'light',
+    globalSettings: { opacity: 0.8, preset: 'default' },
+    canvas: { x: 0, y: 0, scale: 1, isDragging: false, startX: 0, startY: 0 },
+    focusTarget: null,
+
+    init: function() {
+        this.setupNav();
+        Drawing.init();
+        window.addEventListener('resize', () => { this.containers.forEach(c => c.resize()); Drawing.resize(); });
+        window.addEventListener('mouseup', () => Drag.end());
+        document.addEventListener('keydown', (e) => {
+            if((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); State.undo(); }
+            if((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'Z'))) { e.preventDefault(); State.redo(); }
+        });
+
+        const loader = document.getElementById('loading-overlay');
+        if(loader) {
+            loader.style.opacity = '0';
+            setTimeout(() => loader.remove(), 500);
+        }
+    },
+
+    getId: function() { return 'obj_' + (++this.idCounter); },
+
+    toggleTheme: function() {
+        this.theme = this.theme === 'light' ? 'dark' : 'light';
+        document.body.className = this.theme;
+        this.containers.forEach(c => c.updateGraph());
+    },
+
+    toggleTool: function(id) { document.getElementById(id).classList.toggle('hidden'); },
+    toggleDrawer: function() { document.getElementById('settings-drawer').classList.toggle('open'); },
+
+    setGlobalOpacity: function(v) {
+        this.globalSettings.opacity = parseFloat(v);
+        this.containers.forEach(c=>{c.settings.opacity=this.globalSettings.opacity; c.updateGraph();});
+    },
+    setGlobalTheme: function(p) {
+        this.globalSettings.preset = p;
+        this.containers.forEach(c=>c.updateGraph());
+    },
+
+    createContainer: function(d) {
+        State.push();
+        this.containers.push(new GraphContainer(this.getId(), d));
+    },
+    createNote: function(d) {
+        State.push();
+        new Note(this.getId(), d);
+    },
+    removeContainer: function(id) {
+        State.push();
+        if(this.focusTarget && this.focusTarget.id === id) return;
+        this.containers = this.containers.filter(c => c.id !== id);
+        const el = document.getElementById(id);
+        if(el) el.remove();
+    },
+
+    setupNav: function() {
+        const w = document.getElementById('canvas-wrapper');
+        w.addEventListener('wheel', e => {
+            if(e.target.closest('.plot-area') || e.target.closest('.sidebar') || e.target.closest('input')) return;
+            e.preventDefault();
+            this.canvas.scale = Math.min(Math.max(0.1, this.canvas.scale - e.deltaY * 0.001), 5);
+            this.updTrans();
+        }, {passive:false});
+        w.addEventListener('mousedown', e => {
+            if(e.button === 2 || e.target.id === 'canvas-wrapper') {
+                this.canvas.isDragging = true;
+                this.canvas.startX = e.clientX - this.canvas.x;
+                this.canvas.startY = e.clientY - this.canvas.y;
+            }
+        });
+        window.addEventListener('mousemove', e => {
+            if(this.canvas.isDragging) {
+                this.canvas.x = e.clientX - this.canvas.startX;
+                this.canvas.y = e.clientY - this.canvas.startY;
+                this.updTrans();
+            }
+        });
+        window.addEventListener('mouseup', () => this.canvas.isDragging = false);
+        window.addEventListener('contextmenu', e => e.preventDefault());
+    },
+
+    updTrans: function() {
+        document.getElementById('canvas-transform').style.transform = `translate(${this.canvas.x}px, ${this.canvas.y}px) scale(${this.canvas.scale})`;
+    },
+
+    enterFocus: function(id) {
+        this.focusTarget = this.containers.find(c => c.id === id);
+        if(!this.focusTarget) return;
+        document.getElementById('focus-title').innerText = "Focus: Graph " + id;
+        document.getElementById('focus-page').classList.add('active');
+        const plotDiv = document.getElementById('plot-' + id);
+        document.getElementById('focus-plot-area').appendChild(plotDiv);
+        this.focusTarget.renderFocusControls();
+        document.getElementById('main-toolbar').classList.add('hidden');
+        setTimeout(() => Plotly.relayout(plotDiv, {autosize: true}), 100);
+    },
+
+    exitFocus: function() {
+        if(!this.focusTarget) return;
+        const plotDiv = document.getElementById('plot-' + this.focusTarget.id);
+        document.getElementById('plot-container-' + this.focusTarget.id).appendChild(plotDiv);
+        document.getElementById('focus-page').classList.remove('active');
+        document.getElementById('main-toolbar').classList.remove('hidden');
+        this.focusTarget.renderSidebar();
+        setTimeout(() => Plotly.relayout(plotDiv, {autosize: true}), 100);
+        this.focusTarget = null;
+    }
+};
+
+// --- GRAPH CONTAINER ---
+class GraphContainer {
+    constructor(id, data = null) {
+        this.id = id;
+        this.name = (data && data.name) ? data.name : `Graph ${id}`;
+
+        this.functions = data ? data.functions : [{ expr: 'sin(x)', visible: true }];
+        this.settings = data ? data.settings : {
+            xMin: -5, xMax: 5, yMin: -5, yMax: 5, zMin: -5, zMax: 5,
+            grid: false, intersect: true,
+            opacity: App.globalSettings.opacity,
+            labels: {x:'X', y:'Y', z:'Z'},
+            sparsity: 50, aspectRatio: 'cube', intersectWidth: 5
+        };
+
+        this.defaultVars = data ? data.defaultVars : ['x'];
+        this.sliderValues = data ? data.sliderValues : {};
+        this.sliderConfigs = data ? data.sliderConfigs : {};
+
+        if(!this.settings.labels) this.settings.labels = {x:'X', y:'Y', z:'Z'};
+        if(!this.settings.sparsity) this.settings.sparsity = 50;
+        if(!this.settings.intersectWidth) this.settings.intersectWidth = 5;
+        if(this.settings.zMin === undefined) { this.settings.zMin = -5; this.settings.zMax = 5; }
+
+        this.pos = data ? data.pos : { x: 100 + App.containers.length*30, y: 100 };
+        this.size = data ? data.size : { w: 650, h: 600 };
+
+        this.render();
+        setTimeout(() => this.updateGraph(), 50);
+    }
+
+    resize() {
+        Plotly.relayout(`plot-${this.id}`, {autosize: true});
+    }
+
+    isGraph3D() {
+        return this.defaultVars.length >= 2;
+    }
+
+    // --- HTML Structure ---
+    render() {
+        const el = document.createElement('div');
+        el.className = 'graph-container'; el.id = this.id;
+        el.style.left = this.pos.x + 'px'; el.style.top = this.pos.y + 'px'; el.style.width = this.size.w + 'px';
+
+        el.innerHTML = `
+            <div class="container-header" onmousedown="Drag.start(event, '${this.id}')">
+                <i class="fas fa-cube text-[var(--accent)]"></i>
+                <input type="text" value="${this.name}" class="header-input"
+                    onchange="App.containers.find(c=>c.id=='${this.id}').updName(this.value)"
+                    onmousedown="event.stopPropagation()">
+                <div class="flex gap-1">
+                    <button class="header-btn" onclick="App.containers.find(c=>c.id=='${this.id}').saveImg()"><i class="fas fa-camera"></i></button>
+                    <button class="header-btn" onclick="App.containers.find(c=>c.id=='${this.id}').toggleMin()">_</button>
+                    <button class="header-btn" onclick="App.containers.find(c=>c.id=='${this.id}').enterFocus()">□</button>
+                    <button class="header-btn danger" onclick="App.removeContainer('${this.id}')">✕</button>
+                </div>
+            </div>
+            <div class="graph-body" style="height:${this.size.h}px">
+                <div id="plot-container-${this.id}" class="plot-area"><div id="plot-${this.id}" class="w-full h-full"></div></div>
+                <div class="sidebar" id="sidebar-${this.id}"></div>
+                <div class="resize-handle" onmousedown="Drag.resizeStart(event, '${this.id}')"></div>
+            </div>`;
+
+        document.getElementById('canvas-transform').appendChild(el);
+        document.getElementById(`plot-${this.id}`).addEventListener('wheel', e => e.stopPropagation(), {passive:false});
+        new ResizeObserver(() => Plotly.relayout(`plot-${this.id}`, {autosize: true})).observe(el.querySelector('.plot-area'));
+        this.renderSidebar();
+    }
+
+    updName(val) {
+        State.push();
+        this.name = val;
+    }
+
+    // --- Sidebar & UI ---
+    renderSidebar() {
+        const s = document.getElementById(`sidebar-${this.id}`); if(!s) return;
+        s.innerHTML = `
+            <div class="mb-2">
+                <div class="flex justify-between items-center mb-1">
+                    <span class="label-text">Functions</span>
+                    <button class="text-xs text-blue-500" onclick="App.containers.find(c=>c.id=='${this.id}').addFunc()">+ Add</button>
+                </div>
+                <div id="funcs-${this.id}" class="flex flex-col gap-2"></div>
+            </div>
+
+            <div class="control-group">
+                <div class="flex justify-between cursor-pointer" onclick="document.getElementById('vars-${this.id}').classList.toggle('hidden');">
+                    <span class="label-text mb-0">Variables</span><i class="fas fa-chevron-down text-xs opacity-50"></i>
+                </div>
+                <div id="vars-${this.id}" class="mt-2 space-y-2">
+                    <div>
+                        <span class="label-text">Default Variables</span>
+                        <input type="text" class="styled-input" value="${this.defaultVars.join(', ')}" onchange="App.containers.find(c=>c.id=='${this.id}').updDefaultVars(this.value)">
+                    </div>
+                    <div id="sliders-${this.id}" class="flex flex-col gap-2 mt-2"></div>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <div class="flex justify-between cursor-pointer" onclick="document.getElementById('set-${this.id}').classList.toggle('hidden');">
+                    <span class="label-text mb-0">Settings</span><i class="fas fa-chevron-down text-xs opacity-50"></i>
+                </div>
+                <div id="set-${this.id}" class="hidden mt-3 space-y-2">${this.getSettingsHTML()}</div>
+            </div>`;
+
+        this.renderFuncs(`funcs-${this.id}`);
+        this.renderSliders(`sliders-${this.id}`, 'sidebar');
+    }
+
+
+    renderFocusControls() {
+        document.getElementById('focus-funcs-list').innerHTML = '';
+        document.getElementById('focus-settings-area').innerHTML = '';
+
+        this.renderFuncs('focus-funcs-list');
+
+        document.getElementById('focus-settings-area').innerHTML = `
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 h-full">
+                <div class="flex flex-col gap-4">
+                    <h3 class="font-bold text-lg border-b border-[var(--border)] pb-2">Variables</h3>
+                    <div>
+                        <span class="label-text">Default Variables</span>
+                        <input type="text" class="styled-input w-full" value="${this.defaultVars.join(', ')}" onchange="App.containers.find(c=>c.id=='${this.id}').updDefaultVars(this.value)">
+                        <p class="text-[10px] text-[var(--text-secondary)] mt-1">Separate with commas (e.g. "x, y").</p>
+                    </div>
+                    <div id="focus-sliders" class="flex flex-col gap-2 overflow-y-auto" style="max-height: 300px;"></div>
+                </div>
+                <div class="flex flex-col gap-4">
+                    <h3 class="font-bold text-lg border-b border-[var(--border)] pb-2">Display Settings</h3>
+                    ${this.getSettingsHTML(true)}
+                </div>
+            </div>`;
+
+        this.renderSliders('focus-sliders', 'focus');
+    }
+
+    getSettingsHTML(exp=false) {
+        const is3D = this.isGraph3D();
+        const display3D = is3D ? '' : 'style="display:none"';
+        return `<div class="grid grid-cols-3 gap-2 mb-2">
+            <input class="styled-input" placeholder="Lbl X" value="${this.settings.labels.x.replace(/"/g, '&quot;')}" onchange="App.containers.find(c=>c.id=='${this.id}').updLbl('x',this.value)">
+            <input class="styled-input" placeholder="Lbl Y" value="${this.settings.labels.y.replace(/"/g, '&quot;')}" onchange="App.containers.find(c=>c.id=='${this.id}').updLbl('y',this.value)">
+            <input class="styled-input" placeholder="Lbl Z" ${display3D} value="${this.settings.labels.z.replace(/"/g, '&quot;')}" onchange="App.containers.find(c=>c.id=='${this.id}').updLbl('z',this.value)">
+        </div>
+        <div class="${exp?'grid grid-cols-3 gap-4':'grid grid-cols-3 gap-2'}">
+            <div><span class="label-text">Range X</span><div class="flex gap-1"><input type="number" class="styled-input p-1" value="${this.settings.xMin}" onchange="State.push(); App.containers.find(c=>c.id=='${this.id}').upd('xMin',this.value)"><input type="number" class="styled-input p-1" value="${this.settings.xMax}" onchange="State.push(); App.containers.find(c=>c.id=='${this.id}').upd('xMax',this.value)"></div></div>
+            <div><span class="label-text">Range Y</span><div class="flex gap-1"><input type="number" class="styled-input p-1" value="${this.settings.yMin}" onchange="State.push(); App.containers.find(c=>c.id=='${this.id}').upd('yMin',this.value)"><input type="number" class="styled-input p-1" value="${this.settings.yMax}" onchange="State.push(); App.containers.find(c=>c.id=='${this.id}').upd('yMax',this.value)"></div></div>
+            <div ${display3D}><span class="label-text">Range Z</span><div class="flex gap-1"><input type="number" class="styled-input p-1" value="${this.settings.zMin}" onchange="State.push(); App.containers.find(c=>c.id=='${this.id}').upd('zMin',this.value)"><input type="number" class="styled-input p-1" value="${this.settings.zMax}" onchange="State.push(); App.containers.find(c=>c.id=='${this.id}').upd('zMax',this.value)"></div></div>
+        </div>
+        <div class="grid grid-cols-2 gap-2 mt-2">
+            <div><span class="label-text">Grid/Point Density</span><input type="range" min="10" max="150" step="5" value="${this.settings.sparsity}" class="w-full h-2 bg-gray-300 rounded" oninput="App.containers.find(c=>c.id=='${this.id}').upd('sparsity',this.value)"></div>
+            <div><span class="label-text">Int. Size</span><input type="range" min="1" max="20" step="1" value="${this.settings.intersectWidth}" class="w-full h-2 bg-gray-300 rounded" oninput="App.containers.find(c=>c.id=='${this.id}').upd('intersectWidth',this.value)"></div>
+        </div>
+        <div class="flex items-center justify-between mb-2 mt-2" ${display3D}><span class="label-text">Aspect Ratio</span><button class="btn-pill text-xs py-1" onclick="App.containers.find(c=>c.id=='${this.id}').toggleAspect()">${this.settings.aspectRatio}</button></div>
+        <div class="flex gap-4">
+            <label class="flex items-center gap-2 text-xs"><input type="checkbox" ${this.settings.grid?'checked':''} onchange="App.containers.find(c=>c.id=='${this.id}').upd('grid',this.checked)"> Show Grid</label>
+            <label class="flex items-center gap-2 text-xs"><input type="checkbox" ${this.settings.intersect?'checked':''} onchange="App.containers.find(c=>c.id=='${this.id}').upd('intersect',this.checked)"> Show Intersections</label>
+        </div>`;
+    }
+
+    renderFuncs(tid) {
+        const div=document.getElementById(tid); if(!div) return; div.innerHTML='';
+        this.functions.forEach((f,i)=>{
+            const row=document.createElement('div'); row.className='control-group flex items-center gap-2 py-2 mb-0'; row.style.background='var(--bg-panel)';
+            row.innerHTML=`<input type="checkbox" ${f.visible?'checked':''} onchange="App.containers.find(c=>c.id=='${this.id}').toggleFunc(${i})"><input type="text" value="${f.expr.replace(/"/g, '&quot;')}" class="styled-input" onchange="State.push(); App.containers.find(c=>c.id=='${this.id}').updFunc(${i},this.value)" onmousedown="event.stopPropagation()"><button class="text-[var(--danger)]" onclick="App.containers.find(c=>c.id=='${this.id}').delFunc(${i})">✕</button>`;
+            div.appendChild(row);
+        });
+    }
+
+    // --- Slider Logic ---
+    renderSliders(tid, prefix = 'sidebar') {
+        const div = document.getElementById(tid); if(!div) return; div.innerHTML = '';
+
+        const vars = new Set();
+        this.functions.forEach(f => {
+            if(!f.visible) return;
+            try {
+                const node = math.parse(f.expr);
+                node.filter(n => n.isSymbolNode).forEach(n => {
+                    if(!this.defaultVars.includes(n.name) &&
+                       !['pi','e','sin','cos','tan','sqrt','log','ln','exp','abs'].includes(n.name)) {
+                        vars.add(n.name);
+                    }
+                });
+            } catch(e){}
+        });
+
+        vars.forEach(v => {
+            if(this.sliderValues[v] === undefined) this.sliderValues[v] = 1;
+            if(!this.sliderConfigs[v]) this.sliderConfigs[v] = {min: -10, max: 10, step: 0.1};
+
+            const cfg = this.sliderConfigs[v];
+            const row = document.createElement('div');
+            row.className = 'bg-[var(--bg-input)] border border-[var(--border)] rounded p-2 text-xs';
+
+            const rangeId = `${prefix}-range-${this.id}-${v}`;
+            const numId = `${prefix}-num-${this.id}-${v}`;
+
+            row.innerHTML = `
+                <div class="flex justify-between items-center mb-1">
+                    <span class="font-bold text-[var(--accent)]">${v}</span>
+                    <button onclick="this.parentElement.nextElementSibling.classList.toggle('hidden')"><i class="fas fa-cog"></i></button>
+                </div>
+                <div class="hidden grid grid-cols-3 gap-1 mb-2">
+                    <input type="number" class="styled-input p-0 px-1" value="${cfg.min}" onchange="App.containers.find(c=>c.id=='${this.id}').updSliderCfg('${v}', 'min', this.value)">
+                    <input type="number" class="styled-input p-0 px-1" value="${cfg.max}" onchange="App.containers.find(c=>c.id=='${this.id}').updSliderCfg('${v}', 'max', this.value)">
+                    <input type="number" class="styled-input p-0 px-1" value="${cfg.step}" onchange="App.containers.find(c=>c.id=='${this.id}').updSliderCfg('${v}', 'step', this.value)">
+                </div>
+                <div class="flex items-center gap-2">
+                    <input type="range" id="${rangeId}"
+                        min="${cfg.min}" max="${cfg.max}" step="${cfg.step}"
+                        value="${this.sliderValues[v]}"
+                        class="flex-grow h-2 bg-gray-300 rounded cursor-pointer"
+                        oninput="App.containers.find(c=>c.id=='${this.id}').updSliderVal('${v}', this.value, false)"
+                        onchange="App.containers.find(c=>c.id=='${this.id}').updateGraph()"
+                    >
+                    <input type="number" id="${numId}"
+                        value="${this.sliderValues[v]}"
+                        class="styled-input w-16 text-center"
+                        step="${cfg.step}"
+                        onchange="App.containers.find(c=>c.id=='${this.id}').updSliderVal('${v}', this.value, true)"
+                    >
+                </div>
+            `;
+            div.appendChild(row);
+        });
+    }
+
+    // --- Updates ---
+    addFunc(){State.push(); this.functions.push({expr:'',visible:true}); this.refreshUI(); this.updateGraph();}
+    delFunc(i){State.push(); this.functions.splice(i,1); this.refreshUI(); this.updateGraph();}
+    toggleFunc(i){this.functions[i].visible=!this.functions[i].visible; this.refreshUI(); this.updateGraph();}
+    updFunc(i,v){this.functions[i].expr=v; this.refreshUI(); this.updateGraph();}
+
+    upd(k,v){this.settings[k]=(k==='grid'||k==='intersect')?v:parseFloat(v); this.updateGraph();}
+    updLbl(k,v){this.settings.labels[k]=v; this.updateGraph();}
+
+    updDefaultVars(v) {
+        State.push();
+        this.defaultVars = v.split(',').map(s=>s.trim()).filter(s=>s);
+        this.refreshUI();
+        this.updateGraph();
+    }
+
+    updSliderVal(name, val, updateGraphBool) {
+        const numVal = parseFloat(val);
+        this.sliderValues[name] = numVal;
+
+        ['sidebar', 'focus'].forEach(prefix => {
+            const rangeEl = document.getElementById(`${prefix}-range-${this.id}-${name}`);
+            const numEl = document.getElementById(`${prefix}-num-${this.id}-${name}`);
+            if (rangeEl) rangeEl.value = numVal;
+            if (numEl) numEl.value = numVal;
+        });
+
+        if (updateGraphBool) {
+            this.updateGraph();
+        }
+    }
+
+    updSliderCfg(name, key, val) {
+        this.sliderConfigs[name][key] = parseFloat(val);
+        this.refreshUI();
+    }
+
+    toggleAspect(){this.settings.aspectRatio = this.settings.aspectRatio==='cube'?'data':'cube'; this.refreshUI(); this.updateGraph();}
+    refreshUI(){if(App.focusTarget===this)this.renderFocusControls(); else this.renderSidebar();}
+    enterFocus() { App.enterFocus(this.id); }
+    saveImg(){Plotly.toImage(document.getElementById(`plot-${this.id}`),{format:'png',height:600,width:800}).then(u=>{const a=document.createElement('a');a.href=u;a.download='graph.png';a.click();});}
+    toggleMin(){document.getElementById(this.id).classList.toggle('minimized'); this.resize();}
+
+    // --- Helpers ---
+    getThemeData(idx) {
+	const zMin = this.settings ? parseFloat(this.settings.zMin) : undefined;
+        const zMax = this.settings ? parseFloat(this.settings.zMax) : undefined;
+        const p = App.globalSettings.preset;
+	const buildTheme = (scale, bg, font, grid) => ({
+            scale: scale,
+            bg: bg,
+            font: font,
+            grid: grid,
+            cmin: zMin,
+            cmax: zMax
+        });
+	if (p === 'topo') return buildTheme(idx % 2 === 0 ? 'Earth' : 'Picnic', 'rgba(0,0,0,0)', '#586e75', '#d2b48c');
+        if (p === 'matrix') return buildTheme(idx % 2 === 0 ? [[0, 'black'], [1, '#0f0']] : [[0, 'black'], [1, '#003300']], 'rgba(0,0,0,0)', '#0f0', '#003300');
+        if (p === 'sunset') return buildTheme(idx % 2 === 0 ? 'Hot' : 'Portland', 'rgba(0,0,0,0)', '#1e293b', '#e2e8f0');
+        if (p === 'ocean') return buildTheme(idx % 2 === 0 ? 'Tealgrn' : 'Blues', 'rgba(0,0,0,0)', '#06b6d4', '#164e63');
+        if (p === 'blueprint') return buildTheme('Blues', 'rgba(0,0,0,0)', '#bfdbfe', '#1e3a8a');
+        if (p === 'neon') return buildTheme(idx % 2 === 0 ? 'Electric' : 'Picnic', 'rgba(0,0,0,0)', '#4ade80', '#111827');
+        const scales = ['Viridis', 'Plasma', 'Magma', 'Inferno'];
+        return buildTheme(scales[idx % scales.length], 'rgba(0,0,0,0)', App.theme === 'dark' ? '#f1f5f9' : '#1e293b', App.theme === 'dark' ? '#475569' : '#e2e8f0');
+    }
+
+    getPalette() {
+        const p = App.globalSettings.preset;
+        if(p==='blueprint') return ['#ffffff', '#93c5fd', '#60a5fa', '#2563eb'];
+        if(p==='neon') return ['#ff00ff', '#00ffff', '#ffff00', '#00ff00'];
+        if(p==='scientific') return ['#000000', '#ef4444', '#1d4ed8', '#059669'];
+        return ['#6366f1', '#ec4899', '#10b981', '#f59e0b', '#8b5cf6'];
+    }
+
+    // --- Core Graphing Logic ---
+    updateGraph() {
+        const active = this.functions.filter(f => f.visible && f.expr.trim());
+        const themeData = this.getThemeData(0);
+        const palette = this.getPalette();
+        const is3D = this.isGraph3D();
+        const traces = [];
+        const activeData = [];
+
+        const v1 = this.defaultVars[0] || 'x';
+        const v2 = this.defaultVars[1] || 'y';
+
+        const commonLayout = {
+            autosize: true,
+            margin: {t:0,b:0,l:0,r:0},
+            paper_bgcolor: themeData.bg,
+            plot_bgcolor: themeData.bg,
+            font: { color: themeData.font, family: 'Inter' },
+            uirevision: 'true'
+        };
+
+        if (!is3D) {
+            // --- 2D Logic ---
+            const layout = {
+                ...commonLayout,
+                xaxis: { title: this.settings.labels.x, color: themeData.font, gridcolor: themeData.grid, showgrid: this.settings.grid, range: [this.settings.xMin, this.settings.xMax] },
+                yaxis: { title: this.settings.labels.y, color: themeData.font, gridcolor: themeData.grid, showgrid: this.settings.grid, range: [this.settings.yMin, this.settings.yMax] }
+            };
+
+            const step = (this.settings.xMax - this.settings.xMin) / (this.settings.sparsity * 3);
+
+            active.forEach((f, idx) => {
+                const code = math.compile(f.expr);
+                const xVals=[], yVals=[];
+                const isDiscrete = f.expr.includes('sum(');
+                const lineShape = isDiscrete ? 'hv' : 'linear';
+
+                for(let val=this.settings.xMin; val<=this.settings.xMax; val+=step) {
+                    xVals.push(val);
+                    try {
+                        const scope = { [v1]: val, ...this.sliderValues };
+                        yVals.push(code.evaluate(scope));
+                    } catch { yVals.push(NaN); }
+                }
+                activeData.push({x: xVals, y: yVals});
+                traces.push({
+                    type: 'scatter', mode: 'lines', x: xVals, y: yVals,
+                    line: { width: 3, color: palette[idx % palette.length], shape: lineShape }, name: f.expr
+                });
+            });
+
+            if(this.settings.intersect && activeData.length >= 2) {
+                for(let i=0; i<activeData.length; i++) {
+                    for(let j=i+1; j<activeData.length; j++) {
+                        const A = activeData[i]; const B = activeData[j];
+                        const intX=[], intY=[];
+                        for(let k=0; k<A.x.length-1; k++) {
+                            const yA1 = A.y[k]; const yB1 = B.y[k];
+                            const yA2 = A.y[k+1]; const yB2 = B.y[k+1];
+                            const diff1 = yA1 - yB1; const diff2 = yA2 - yB2;
+                            if (Math.sign(diff1) !== Math.sign(diff2)) {
+                                const r = Math.abs(diff1) / (Math.abs(diff1) + Math.abs(diff2));
+                                intX.push(A.x[k] + r * (A.x[k+1] - A.x[k]));
+                                intY.push(yA1 + r * (yA2 - yA1));
+                            } else if (Math.abs(diff1) < 0.05) {
+                                if (k>0 && Math.abs(A.y[k-1]-B.y[k-1]) >= Math.abs(diff1) && Math.abs(diff2) >= Math.abs(diff1)) {
+                                    intX.push(A.x[k]); intY.push(yA1);
+                                }
+                            }
+                        }
+                        if(intX.length > 0) {
+                            traces.push({
+                                type: 'scatter', mode: 'markers', x: intX, y: intY,
+                                marker: { size: this.settings.intersectWidth * 1.5, color: '#ef4444' }, name: 'Int'
+                            });
+                        }
+                    }
+                }
+            }
+            Plotly.react(`plot-${this.id}`, traces, layout, {displayModeBar: false, responsive: true});
+
+        } else {
+            // --- 3D Logic ---
+            const layout = {
+                ...commonLayout,
+                scene: {
+                    xaxis: { title: this.settings.labels.x, color: themeData.font, gridcolor: themeData.grid, range:[this.settings.xMin, this.settings.xMax] },
+                    yaxis: { title: this.settings.labels.y, color: themeData.font, gridcolor: themeData.grid, range:[this.settings.yMin, this.settings.yMax] },
+                    zaxis: { title: this.settings.labels.z, color: themeData.font, gridcolor: themeData.grid, range:[this.settings.zMin, this.settings.zMax] },
+                    aspectmode: this.settings.aspectRatio||'cube',
+                }
+            };
+
+            const active3DData = [];
+            const steps = parseInt(this.settings.sparsity);
+
+            active.forEach((f, idx) => {
+                try {
+                    const code = math.compile(f.expr);
+                    const xs = (this.settings.xMax-this.settings.xMin)/steps;
+                    const ys = (this.settings.yMax-this.settings.yMin)/steps;
+
+                    const xData=[], yData=[], zData=[];
+
+                    for(let yVal=this.settings.yMin; yVal<=this.settings.yMax; yVal+=ys) {
+                        const zRow=[]; yData.push(yVal);
+
+                        for(let xVal=this.settings.xMin; xVal<=this.settings.xMax; xVal+=xs) {
+                            if(yVal===this.settings.yMin) xData.push(xVal);
+                            try {
+                                const scope = {
+                                    [v1]: xVal,
+                                    [v2]: yVal,
+                                    ...this.sliderValues
+                                };
+                                const val = code.evaluate(scope);
+                                zRow.push(val);
+                            } catch { zRow.push(NaN); }
+                        }
+                        zData.push(zRow);
+                    }
+                    active3DData.push({x:xData, y:yData, z:zData});
+		    const theme = this.getThemeData(idx);
+
+                    traces.push({
+                        type: 'surface', x: xData, y: yData, z: zData,
+                        colorscale: theme.scale, opacity: this.settings.opacity, showscale: false, cmin: theme.cmin, cmax: theme.cmax,
+                        contours: {
+                            x: {show:this.settings.grid, color: App.theme==='dark'?'rgba(255,255,255,0.2)':'rgba(0,0,0,0.2)', start:this.settings.xMin, end:this.settings.xMax, size: xs},
+                            y: {show:this.settings.grid, color: App.theme==='dark'?'rgba(255,255,255,0.2)':'rgba(0,0,0,0.2)', start:this.settings.yMin, end:this.settings.yMax, size: ys}
+                        }
+                    });
+                } catch(e) {}
+            });
+
+            // 3D Intersections
+            if(this.settings.intersect && active3DData.length >= 2) {
+                for(let aIdx = 0; aIdx < active3DData.length; aIdx++) {
+                    for(let bIdx = aIdx + 1; bIdx < active3DData.length; bIdx++) {
+                        const A = active3DData[aIdx]; const B = active3DData[bIdx];
+                        const ptX=[], ptY=[], ptZ=[];
+
+                        for(let i=0; i<A.y.length-1; i++) {
+                            for(let j=0; j<A.x.length-1; j++) {
+                                const zA = A.z[i][j]; const zB = B.z[i][j];
+                                if(isNaN(zA)||isNaN(zB)) continue;
+
+                                const d00 = zA - zB;
+                                const d10 = (A.z[i][j+1]||zA) - (B.z[i][j+1]||zB);
+                                const d01 = (A.z[i+1]?.[j]||zA) - (B.z[i+1]?.[j]||zB);
+
+                                if(Math.sign(d00) !== Math.sign(d10)) {
+                                    const r = Math.abs(d00)/(Math.abs(d00)+Math.abs(d10));
+                                    ptX.push(A.x[j] + r*(A.x[j+1]-A.x[j]));
+                                    ptY.push(A.y[i]);
+                                    ptZ.push(zA + r*((A.z[i][j+1]||zA)-zA));
+                                }
+                                if(Math.sign(d00) !== Math.sign(d01)) {
+                                    const r = Math.abs(d00)/(Math.abs(d00)+Math.abs(d01));
+                                    ptX.push(A.x[j]);
+                                    ptY.push(A.y[i] + r*(A.y[i+1]-A.y[i]));
+                                    ptZ.push(zA + r*((A.z[i+1]?.[j]||zA)-zA));
+                                }
+                            }
+                        }
+                        if(ptX.length > 0) {
+                            traces.push({
+                                type:'scatter3d', mode:'markers',
+                                x:ptX, y:ptY, z:ptZ,
+                                marker:{size: this.settings.intersectWidth/2, color:'#ef4444'},
+                                name:'Int'
+                            });
+                        }
+                    }
+                }
+            }
+            Plotly.react(`plot-${this.id}`, traces, layout, {displayModeBar: false, responsive: true});
+        }
+    }
+}
+
+// --- NOTE CLASS ---
+class Note {
+    constructor(id, data = null) {
+        this.id = id;
+        this.text = data ? data.text : "# Note\nDouble-click to edit.";
+        this.pos = data ? data.pos : {x:200,y:200};
+        const el = document.createElement('div');
+        el.className = 'markdown-note';
+        el.id = this.id;
+        el.style.left = this.pos.x+'px';
+        el.style.top = this.pos.y+'px';
+        el.innerHTML = `<div class="note-header" onmousedown="Drag.start(event, '${this.id}')"><button class="text-xs hover:text-red-500" onclick="this.closest('.markdown-note').remove()">✕</button></div><div class="p-2 h-full overflow-auto prose prose-sm leading-tight view-mode" ondblclick="this.nextElementSibling.classList.remove('hidden');this.classList.add('hidden');this.nextElementSibling.focus()"></div><textarea class="w-full h-full bg-transparent p-2 outline-none hidden resize-none" onblur="App.notes.find(n=>n.id=='${this.id}').update(this.value)" onmousedown="event.stopPropagation()"></textarea>`;
+        document.getElementById('canvas-transform').appendChild(el);
+        App.notes.push(this);
+        this.update(this.text);
+    }
+    update(t) {
+        this.text = t;
+        const el = document.getElementById(this.id);
+        if(!el) return;
+        el.querySelector('textarea').value = t;
+        el.querySelector('.view-mode').innerHTML = marked.parse(t);
+        el.querySelector('.view-mode').classList.remove('hidden');
+        el.querySelector('textarea').classList.add('hidden');
+    }
+}
+
+// --- DRAWING ---
+const Drawing={
+    mode:'none',isDrawing:false,paths:[],ctx:null,startP:null,pathPoints:[],
+    init: function() {
+        this.ctx=document.getElementById('drawing-layer').getContext('2d');
+        this.resize();
+        window.addEventListener('mousedown',e=>this.start(e));
+        window.addEventListener('mousemove',e=>this.draw(e));
+        window.addEventListener('mouseup',()=>this.end());
+    },
+    resize: function() {
+        this.ctx.canvas.width=5000;
+        this.ctx.canvas.height=5000;
+        this.redraw();
+    },
+    setMode: function(m) {
+        this.mode=m;
+        document.getElementById('drawing-layer').style.pointerEvents=m==='none'?'none':'auto';
+        if(m === 'pen') document.body.classList.add('mode-pen'); else document.body.classList.remove('mode-pen');
+        if(m === 'eraser') document.body.classList.add('mode-eraser'); else document.body.classList.remove('mode-eraser');
+        if(m === 'arrow') document.body.classList.add('mode-arrow'); else document.body.classList.remove('mode-arrow');
+    },
+    getP: function(e) {
+        const r=document.getElementById('canvas-transform').getBoundingClientRect();
+        return{x:(e.clientX-r.left)/App.canvas.scale,y:(e.clientY-r.top)/App.canvas.scale};
+    },
+    start: function(e) {
+        if(this.mode==='none'||e.target.id!=='drawing-layer')return;
+        State.push();
+        this.isDrawing=true;
+        this.startP=this.getP(e);
+        this.pathPoints=[this.startP];
+    },
+    draw: function(e) {
+        if(!this.isDrawing)return;
+        const p=this.getP(e);
+        this.redraw();
+        if(this.mode==='arrow'){this.renderArrow(this.startP,p);}
+        else{this.pathPoints.push(p);this.renderPath(this.pathPoints,this.mode);}
+    },
+    end: function() {
+        if(!this.isDrawing)return;
+        this.isDrawing=false;
+        const c=document.getElementById('draw-color').value;
+        const lastP=this.getP(event);
+        if(this.mode==='arrow')this.paths.push({type:'arrow',s:this.startP,e:lastP,c});
+        else this.paths.push({type:this.mode,pts:this.pathPoints,c});
+        this.redraw();
+    },
+    redraw: function() {
+        this.ctx.clearRect(0,0,5000,5000);
+        this.paths.forEach(p=>{
+            if(p.type==='arrow')this.renderArrow(p.s,p.e,p.c);
+            else this.renderPath(p.pts,p.type,p.c);
+        });
+    },
+    renderPath: function(pts,t,c) {
+        if(pts.length<2)return;
+        this.ctx.beginPath();
+        this.ctx.lineWidth=t==='eraser'?20:3;
+        if(t==='eraser'){this.ctx.globalCompositeOperation='destination-out';this.ctx.strokeStyle='rgba(0,0,0,1)';}
+        else{this.ctx.globalCompositeOperation='source-over';this.ctx.strokeStyle=c||document.getElementById('draw-color').value;}
+        this.ctx.moveTo(pts[0].x,pts[0].y);
+        for(let i=1;i<pts.length;i++)this.ctx.lineTo(pts[i].x,pts[i].y);
+        this.ctx.stroke();
+        this.ctx.globalCompositeOperation='source-over';
+    },
+    renderArrow: function(s,e,c) {
+        const h=15,a=Math.atan2(e.y-s.y,e.x-s.x);
+        this.ctx.lineWidth=3;
+        this.ctx.strokeStyle=c||document.getElementById('draw-color').value;
+        this.ctx.globalCompositeOperation='source-over';
+        this.ctx.beginPath();
+        this.ctx.moveTo(s.x,s.y);
+        this.ctx.lineTo(e.x,e.y);
+        this.ctx.lineTo(e.x-h*Math.cos(a-Math.PI/6),e.y-h*Math.sin(a-Math.PI/6));
+        this.ctx.moveTo(e.x,e.y);
+        this.ctx.lineTo(e.x-h*Math.cos(a+Math.PI/6),e.y-h*Math.sin(a+Math.PI/6));
+        this.ctx.stroke();
+    },
+    clear: function(){this.paths=[];this.redraw();}
+};
+
+// --- DRAG ---
+const Drag={
+    target:null,isResizing:false,ghost:null,resizeTarget:null,
+    start: function(e,id) {
+        if(e.target.tagName==='INPUT'||e.target.closest('button'))return;
+        State.push();
+        this.target=document.getElementById(id);
+        this.startX=e.clientX;
+        this.startY=e.clientY;
+        this.initL=parseFloat(this.target.style.left);
+        this.initT=parseFloat(this.target.style.top);
+
+        document.querySelectorAll('.graph-container,.markdown-note').forEach(x=>x.style.zIndex=10);
+        this.target.style.zIndex=50;
+
+        window.addEventListener('mousemove',this.move);
+    },
+    startAbsolute: function(e,id){this.start(e,id);},
+    move: function(e) {
+        if(!Drag.target)return;
+        const s=Drag.target.classList.contains('tool-panel')?1:App.canvas.scale;
+        Drag.target.style.left=`${Drag.initL+(e.clientX-Drag.startX)/s}px`;
+        Drag.target.style.top=`${Drag.initT+(e.clientY-Drag.startY)/s}px`;
+    },
+    resizeStart: function(e,id) {
+        e.stopPropagation();
+        document.querySelectorAll('.ghost-resizer').forEach(el=>el.remove());
+        this.isResizing=true;
+        this.resizeTarget=document.getElementById(id);
+        this.startX=e.clientX;
+        this.startY=e.clientY;
+        this.initW=parseFloat(this.resizeTarget.style.width);
+        this.initH=parseFloat(this.resizeTarget.querySelector('.graph-body').style.height.replace('px',''));
+        this.ghost=document.createElement('div');
+        this.ghost.className='ghost-resizer';
+        this.ghost.style.left=this.resizeTarget.style.left;
+        this.ghost.style.top=this.resizeTarget.style.top;
+        this.ghost.style.width=this.resizeTarget.style.width;
+        this.ghost.style.height=this.resizeTarget.offsetHeight+'px';
+        this.ghost.style.transform=document.getElementById('canvas-transform').style.transform;
+        this.ghost.style.transformOrigin='0 0';
+        document.body.appendChild(this.ghost);
+        window.addEventListener('mousemove',this.resizeMove);
+        window.addEventListener('mouseup',this.resizeEnd);
+    },
+    resizeMove: function(e) {
+        if(!Drag.isResizing)return;
+        const s=App.canvas.scale;
+        const nw=Math.max(300,Drag.initW+(e.clientX-Drag.startX)/s);
+        const nh=Math.max(200,Drag.initH+(e.clientY-Drag.startY)/s);
+        Drag.ghost.style.width=nw+'px';
+        Drag.ghost.style.height=(nh+44)+'px';
+    },
+    resizeEnd: function() {
+        Drag.isResizing=false;
+        document.querySelectorAll('.ghost-resizer').forEach(el=>el.remove());
+        if(Drag.ghost&&Drag.resizeTarget){
+            const finalW=Drag.ghost.style.width;
+            const finalH=(parseFloat(Drag.ghost.style.height)-44)+'px';
+            Drag.resizeTarget.style.width=finalW;
+            Drag.resizeTarget.querySelector('.graph-body').style.height=finalH;
+            App.containers.find(c=>c.id===Drag.resizeTarget.id).resize();
+        }
+        Drag.ghost=null;
+        Drag.resizeTarget=null;
+        window.removeEventListener('mousemove',Drag.resizeMove);
+        window.removeEventListener('mouseup',Drag.resizeEnd);
+    },
+    end: function() {
+        if(Drag.target){
+            const id=Drag.target.id;
+            const x=parseFloat(Drag.target.style.left);
+            const y=parseFloat(Drag.target.style.top);
+            const c=App.containers.find(c=>c.id===id);
+            if(c)c.pos={x,y};
+            const n=App.notes.find(n=>n.id===id);
+            if(n)n.pos={x,y};
+        }
+        Drag.target=null;
+        window.removeEventListener('mousemove',Drag.move);
+    }
+};
+
+const Calc={
+    add: function(v){document.getElementById('calc-display').value+=v},
+    clear: function(){document.getElementById('calc-display').value='';document.getElementById('calc-res').innerText=''},
+    eval: function(){try{document.getElementById('calc-res').innerText=math.evaluate(document.getElementById('calc-display').value)}catch{document.getElementById('calc-res').innerText='Error'}}
+};
+
+// --- INITIALIZATION ---
+window.onload = function() {
+    try {
+        if (typeof math !== 'undefined') {
+            math.import({
+                ln: math.log,
+                integral: function(exprStr, varName, start, end) {
+                    const step = (end - start) / 500;
+                    let sum = 0; const code = math.compile(exprStr);
+                    for(let i = start; i < end; i += step) { sum += code.evaluate({[varName]: i + step/2}) * step; }
+                    return sum;
+                },
+                sum: function(exprStr, varName, start, end) {
+                    let sum = 0; const code = math.compile(exprStr);
+                    for(let i = start; i <= end; i++) { sum += code.evaluate({[varName]: i}); }
+                    return sum;
+                }
+            }, { override: true });
+        }
+        App.init();
+        document.getElementById('loading-overlay').innerHTML = "";
+        document.getElementById('loading-overlay').style.display = "none";
+    } catch(e) {
+        document.getElementById('loading-overlay').innerHTML = "Startup Error. Check Console.";
+        console.error(e);
+    }
+};
+</script>
+</body>
+</html>
+
