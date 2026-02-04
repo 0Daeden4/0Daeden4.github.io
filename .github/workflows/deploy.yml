@@ -33,15 +33,14 @@ jobs:
       - name: Minify HTML
         run: |
           mkdir -p dist
-          cp -r src/. dist/
-          find dist -name "*.html" | while read file; do
+          for file in src/*.html; do
+            filename=$(basename "$file")
             npx html-minifier-terser "$file" \
               --collapse-whitespace \
               --remove-comments \
               --minify-js true \
               --minify-css true \
-              -o "$file.temp"
-            mv "$file.temp" "$file"
+              -o "dist/$filename"
           done
 
       - name: Setup Pages
