@@ -33,12 +33,16 @@ jobs:
       - name: Minify HTML
         run: |
           mkdir -p dist
-          npx html-minifier-terser src/index.html \
-            --collapse-whitespace \
-            --remove-comments \
-            --minify-js true \
-            --minify-css true \
-            -o dist/index.html
+          cp -r src/. dist/
+          find dist -name "*.html" | while read file; do
+            npx html-minifier-terser "$file" \
+              --collapse-whitespace \
+              --remove-comments \
+              --minify-js true \
+              --minify-css true \
+              -o "$file.temp"
+            mv "$file.temp" "$file"
+          done
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
