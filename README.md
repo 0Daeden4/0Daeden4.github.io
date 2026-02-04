@@ -3,7 +3,12 @@
 
 ---
 
-Hopefully this will make studying with friends easier.
-
 # Known Problems
-Undo and redo is not working properly so don't rely on it.
+Undo and redo on the **Graph Visualization Space** is not working properly so don't rely on it.
+
+---
+# Explicitly Used Spaces
+
+- https://freefrontend.com/javascript-background-effects/
+- https://cursify.vercel.app/components/blob-cursor
+
