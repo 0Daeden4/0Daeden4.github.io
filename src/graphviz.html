@@ -248,14 +248,12 @@ const Project = {
                 sliderValues: c.sliderValues,
                 sliderConfigs: c.sliderConfigs
             })),
-            notes: App.notes.map(n => ({
-                id: n.id, pos: n.pos, text: n.text
-            })),
+            notes: App.notes.map(n => ({ id: n.id, pos: n.pos, text: n.text })),
             drawing: Drawing.paths
         };
     },
     save: function() {
-        const data = JSON.stringify(this.getExportData());
+        const data = JSON.stringify(this.getExportData(), null, 2);
         const blob = new Blob([data], {type: 'application/json'});
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -268,13 +266,60 @@ const Project = {
         const reader = new FileReader();
         reader.onload = function(e) {
             try {
-                const data = JSON.parse(e.target.result);
+                let raw = e.target.result;
+                raw = raw.replace(/```json/g, '').replace(/```/g, '');
+                const first = raw.indexOf('{');
+                const last = raw.lastIndexOf('}');
+                if (first !== -1 && last !== -1) raw = raw.substring(first, last + 1);
+
+                const data = JSON.parse(raw);
                 Project.loadData(data);
-            } catch(err) { alert('Invalid file'); console.error(err); }
+            } catch(err) {
+                console.error(err);
+                alert('Load Error: ' + err.message);
+            }
         };
         reader.readAsText(file);
     },
     loadData: function(data) {
+        if (!data) return;
+
+        data.containers = Array.isArray(data.containers) ? data.containers : [];
+        data.notes = Array.isArray(data.notes) ? data.notes : [];
+        data.drawing = Array.isArray(data.drawing) ? data.drawing : [];
+
+        data.containers.forEach((c, i) => {
+            if (!c.id) c.id = 'obj_' + (Date.now() + i);
+
+            c.pos = c.pos || {x: 0, y: 0};
+            c.pos.x = parseFloat(c.pos.x) || 0;
+            c.pos.y = parseFloat(c.pos.y) || 0;
+
+            c.size = c.size || {w: 650, h: 400};
+            c.size.w = parseFloat(c.size.w) || 650;
+            c.size.h = parseFloat(c.size.h) || 400;
+
+            c.settings = c.settings || {};
+            ['xMin','xMax','yMin','yMax','zMin','zMax','opacity','sparsity','intersectWidth'].forEach(k => {
+                if(c.settings[k] !== undefined) c.settings[k] = parseFloat(c.settings[k]);
+            });
+
+            if (c.settings.grid === undefined) c.settings.grid = true;
+
+            c.settings.labels = Object.assign({x:'X', y:'Y', z:'Z'}, c.settings.labels || {});
+
+            c.functions = Array.isArray(c.functions) ? c.functions : [];
+            c.defaultVars = Array.isArray(c.defaultVars) ? c.defaultVars : ['x'];
+            c.sliderValues = c.sliderValues || {};
+            c.sliderConfigs = c.sliderConfigs || {};
+        });
+
+        data.notes.forEach((n, i) => {
+            if (!n.id) n.id = 'note_' + (Date.now() + i);
+            n.pos = n.pos || {x: 100, y: 100};
+            n.text = n.text || "";
+        });
+
         App.containers.forEach(c => { const el=document.getElementById(c.id); if(el)el.remove(); });
         App.containers = [];
         App.notes.forEach(n => { const el=document.getElementById(n.id); if(el)el.remove(); });
@@ -283,25 +328,16 @@ const Project = {
 
         let maxId = 0;
         const scanId = (idStr) => {
-            const num = parseInt(idStr.replace('obj_', ''));
-            if(!isNaN(num) && num > maxId) maxId = num;
+            if(typeof idStr === 'string' && idStr.startsWith('obj_')) {
+                const num = parseInt(idStr.replace('obj_', ''));
+                if(!isNaN(num) && num > maxId) maxId = num;
+            }
         };
 
-        if(data.containers) {
-            data.containers.forEach(d => {
-                scanId(d.id);
-                const c = new GraphContainer(d.id, d);
-                App.containers.push(c);
-            });
-        }
-        if(data.notes) {
-            data.notes.forEach(d => {
-                scanId(d.id);
-                new Note(d.id, d);
-            });
-        }
+        if(data.containers) data.containers.forEach(d => { scanId(d.id); App.containers.push(new GraphContainer(d.id, d)); });
+        if(data.notes) data.notes.forEach(d => { scanId(d.id); new Note(d.id, d); });
 
-        App.idCounter = maxId;
+        App.idCounter = maxId > 0 ? maxId : (Date.now() % 10000);
 
         if(data.drawing) { Drawing.paths = data.drawing; Drawing.redraw(); }
 
